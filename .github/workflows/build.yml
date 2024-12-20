@@ -2,41 +2,56 @@ name: Build and Publish
 
 on:
   push:
-    branches:
-      - master
-      - fix/fix-broken-go-arm-build
-    tags:
-      - 'v*.*.*'
+    branches: [master, fix/fix-broken-go-arm-build]
+    tags: ['v*.*.*']
   pull_request:
-    branches:
-      - master
+    branches: [master]
   workflow_dispatch:
   schedule:
     - cron: '30 4 1,15 * *'
 
 jobs:
-
   build:
+    strategy:
+      matrix:
+        # Define the architectures we want to build for
+        arch:
+          - name: amd64
+            platform: linux/amd64
+          - name: arm64
+            platform: linux/arm64
+          - name: armv7
+            platform: linux/arm/v7
+        # Define the images we want to build
+        image:
+          - name: ubuntu
+            base: ""
+            repo: lancachenet/ubuntu
+          - name: ubuntu-nginx
+            base: ghcr.io/oct8l/lancache-ubuntu
+            repo: lancachenet/ubuntu-nginx
+          - name: generic
+            base: ghcr.io/oct8l/lancache-ubuntu-nginx
+            repo: lancachenet/generic
+          - name: monolithic
+            base: ghcr.io/oct8l/lancache-generic
+            repo: lancachenet/monolithic
+            extra_files:
+              - src: 20_cache.conf
+                dst: overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
+          - name: sniproxy
+            base: ""
+            repo: lancachenet/sniproxy
+          - name: lancache-dns
+            base: ghcr.io/oct8l/lancache-ubuntu
+            repo: lancachenet/lancache-dns
 
     runs-on: ubuntu-latest
-
     steps:
-
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
 
       - name: Login to Github Packages
         if: github.event_name != 'pull_request'
@@ -46,53 +61,65 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & Push lancachenet/ubuntu
-        run: |
-          git clone https://github.com/lancachenet/ubuntu.git
-          cd ubuntu
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-ubuntu --push .
-          cd ..
+      # Add cache mount setup
+      - name: Set up Docker Build Cache
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ matrix.image.name }}-${{ matrix.arch.name }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ matrix.image.name }}-${{ matrix.arch.name }}-
+            ${{ runner.os }}-buildx-${{ matrix.image.name }}-
+            ${{ runner.os }}-buildx-
 
-      - name: Build & Push lancachenet/ubuntu-nginx
+      - name: Build Image
         run: |
-          git clone https://github.com/lancachenet/ubuntu-nginx.git
-          cd ubuntu-nginx
-          sed -i '1cFROM ghcr.io/oct8l/lancache-ubuntu' Dockerfile
-          cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-ubuntu-nginx --push .
-          cd ..
+          git clone https://github.com/${{ matrix.image.repo }}.git
+          cd $(basename ${{ matrix.image.repo }})
 
-      - name: Build & Push lancachenet/generic
-        run: |
-          git clone https://github.com/lancachenet/generic.git
-          cd generic
-          sed -i '1cFROM ghcr.io/oct8l/lancache-ubuntu-nginx' Dockerfile
-          cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-generic --push .
-          cd ..
+          # Update base image if specified
+          if [ ! -z "${{ matrix.image.base }}" ]; then
+            sed -i "1cFROM ${{ matrix.image.base }}" Dockerfile
+          fi
 
-      - name: Build & Push lancachenet/monolithic
-        run: |
-          git clone https://github.com/lancachenet/monolithic.git
-          cd monolithic
-          sed -i '1cFROM ghcr.io/oct8l/lancache-generic' Dockerfile
-          cat Dockerfile
-          cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-monolithic --push .
-          cd ..
+          # Copy any extra files if specified (for monolithic)
+          if [ "${{ matrix.image.name }}" == "monolithic" ]; then
+            cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
+          fi
 
-      - name: Build & Push lancachenet/sniproxy
-        run: |
-          git clone https://github.com/lancachenet/sniproxy.git
-          cd sniproxy
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-sniproxy --push .
-          cd ..
+          # Build for specific architecture with caching
+          docker buildx build \
+            --platform ${{ matrix.arch.platform }} \
+            -t ghcr.io/oct8l/lancache-${{ matrix.image.name }}:${{ matrix.arch.name }} \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --push .
 
-      - name: Build & Push lancachenet/lancache-dns
+      # Temp fix for https://github.com/docker/build-push-action/issues/252
+      # This prevents the cache from growing infinitely
+      - name: Move cache
         run: |
-          git clone https://github.com/lancachenet/lancache-dns.git
-          cd lancache-dns
-          sed -i '1cFROM ghcr.io/oct8l/lancache-ubuntu' Dockerfile
-          cat Dockerfile
-          docker buildx build --build-arg BUILDPLATFORM="linux/amd64,linux/arm64/v8,linux/arm/v7" --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-dns --push .
-          cd ..
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+  # Create multi-arch manifests after all builds complete
+  create-manifests:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Login to Github Packages
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Multi-arch Manifests
+        run: |
+          for IMAGE in ubuntu ubuntu-nginx generic monolithic sniproxy lancache-dns; do
+            docker buildx imagetools create -t ghcr.io/oct8l/lancache-$IMAGE:latest \
+              ghcr.io/oct8l/lancache-$IMAGE:amd64 \
+              ghcr.io/oct8l/lancache-$IMAGE:arm64 \
+              ghcr.io/oct8l/lancache-$IMAGE:armv7
+          done
