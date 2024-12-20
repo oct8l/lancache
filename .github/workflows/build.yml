@@ -96,9 +96,16 @@ jobs:
           sed -i "1cFROM ${{ env.REGISTRY }}/lancache-ubuntu" Dockerfile
           cat Dockerfile
 
-          for platform in "linux/arm64/v8"; do
+          for platform in "linux/amd64" "linux/arm64/v8" "linux/arm/v7"; do
             echo "Building for $platform"
             docker buildx build \
+              --platform $platform \
+              --progress plain \
+              --target builder-dnstool \
+              -t ${{ env.REGISTRY }}/lancache-dns-builder:${platform//\//-} \
+              . || exit 1
+
+              docker buildx build \
               --platform $platform \
               --progress plain \
               -t ${{ env.REGISTRY }}/lancache-dns:${platform//\//-} \
@@ -110,5 +117,5 @@ jobs:
             ${{ env.REGISTRY }}/lancache-dns:linux-arm64-v8 \
             ${{ env.REGISTRY }}/lancache-dns:linux-arm-v7
 
-          docker manifest push ${{ env.REGISTRY }}/lancache-dns
+            docker manifest push ${{ env.REGISTRY }}/lancache-dns
           cd ..
