@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - fix/fix-broken-go-arm-build
     tags:
       - 'v*.*.*'
   pull_request:
