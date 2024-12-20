@@ -96,7 +96,7 @@ jobs:
           sed -i "1cFROM ${{ env.REGISTRY }}/lancache-ubuntu" Dockerfile
           cat Dockerfile
 
-          for platform in "linux/amd64"; do
+          for platform in "linux/arm64/v8"; do
             echo "Building for $platform"
             docker buildx build \
               --platform $platform \
