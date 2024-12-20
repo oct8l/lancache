@@ -47,12 +47,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & Push lancachenet/ubuntu
-        run: |
-          git clone https://github.com/lancachenet/ubuntu.git
-          cd ubuntu
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-ubuntu --push .
-          cd ..
+      # - name: Build & Push lancachenet/ubuntu
+      #   run: |
+      #     git clone https://github.com/lancachenet/ubuntu.git
+      #     cd ubuntu
+      #     docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-ubuntu --push .
+      #     cd ..
 
       # - name: Build & Push lancachenet/ubuntu-nginx
       #   run: |
