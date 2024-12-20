@@ -94,8 +94,21 @@ jobs:
           git clone https://github.com/lancachenet/lancache-dns.git
           cd lancache-dns
           sed -i "1cFROM ${{ env.REGISTRY }}/lancache-ubuntu" Dockerfile
-          sed -i 's/AS builder-dnstool/AS builder/g' Dockerfile
-          sed -i 's/--from=builder-dnstool/--from=builder/g' Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-dns --push .
+
+          for platform in "linux/amd64" "linux/arm64/v8" "linux/arm/v7"; do
+            echo "Building for $platform"
+            docker buildx build \
+              --platform $platform \
+              --progress plain \
+              -t ${{ env.REGISTRY }}/lancache-dns:${platform//\//-} \
+              --push .
+          done
+
+          docker manifest create ${{ env.REGISTRY }}/lancache-dns \
+            ${{ env.REGISTRY }}/lancache-dns:linux-amd64 \
+            ${{ env.REGISTRY }}/lancache-dns:linux-arm64-v8 \
+            ${{ env.REGISTRY }}/lancache-dns:linux-arm-v7
+
+          docker manifest push ${{ env.REGISTRY }}/lancache-dns
           cd ..
