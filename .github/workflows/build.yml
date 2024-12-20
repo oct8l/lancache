@@ -93,5 +93,5 @@ jobs:
           cd lancache-dns
           sed -i '1cFROM ghcr.io/oct8l/lancache-ubuntu' Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-dns --push .
+          docker buildx build --build-arg BUILDPLATFORM="linux/amd64,linux/arm64/v8,linux/arm/v7" --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-dns --push .
           cd ..
