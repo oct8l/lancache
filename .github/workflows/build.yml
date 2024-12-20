@@ -1,14 +1,14 @@
 name: Build and Publish
 
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+
 on:
   push:
     branches:
-      - master
+      - main
     tags:
       - 'v*.*.*'
-  pull_request:
-    branches:
-      - master
   workflow_dispatch:
   schedule:
     - cron: '30 4 1,15 * *'
@@ -49,49 +49,53 @@ jobs:
         run: |
           git clone https://github.com/lancachenet/ubuntu.git
           cd ubuntu
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-ubuntu --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-ubuntu --push .
           cd ..
 
       - name: Build & Push lancachenet/ubuntu-nginx
         run: |
           git clone https://github.com/lancachenet/ubuntu-nginx.git
           cd ubuntu-nginx
-          sed -i '1cFROM ghcr.io/oct8l/lancache-ubuntu' Dockerfile
+          line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-ubuntu" Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-ubuntu-nginx --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-ubuntu-nginx --push .
           cd ..
 
       - name: Build & Push lancachenet/generic
         run: |
           git clone https://github.com/lancachenet/generic.git
           cd generic
-          sed -i '1cFROM ghcr.io/oct8l/lancache-ubuntu-nginx' Dockerfile
+          line_number=$(grep -n "FROM lancachenet/ubuntu-nginx:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-ubuntu-nginx" Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-generic --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-generic --push .
           cd ..
 
       - name: Build & Push lancachenet/monolithic
         run: |
           git clone https://github.com/lancachenet/monolithic.git
           cd monolithic
-          sed -i '1cFROM ghcr.io/oct8l/lancache-generic' Dockerfile
+          line_number=$(grep -n "FROM lancachenet/generic:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-generic" Dockerfile
           cat Dockerfile
           cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-monolithic --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-monolithic --push .
           cd ..
 
       - name: Build & Push lancachenet/sniproxy
         run: |
           git clone https://github.com/lancachenet/sniproxy.git
           cd sniproxy
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-sniproxy --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-sniproxy --push .
           cd ..
 
       - name: Build & Push lancachenet/lancache-dns
         run: |
           git clone https://github.com/lancachenet/lancache-dns.git
           cd lancache-dns
-          sed -i '1cFROM ghcr.io/oct8l/lancache-ubuntu' Dockerfile
+          line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-ubuntu" Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ghcr.io/oct8l/lancache-dns --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-dns --push .
           cd ..
