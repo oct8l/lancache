@@ -1,4 +1,3 @@
-version: '3'
 services:
   dns:
     image: ghcr.io/oct8l/lancache-dns:latest  ## Pulling DNS server for arm
