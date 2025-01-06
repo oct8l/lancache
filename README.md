@@ -13,8 +13,8 @@ A monolithic Lancache Docker image suite capable of caching all CDNs in a single
 -  After Docker is available, run the following:
 
 ```bash
-sudo git clone https://github.com/oct8l/lancache-multiarch.git
-cd lancache-multiarch
+git clone https://github.com/oct8l/lancache.git
+cd lancache
 nano .env
 ```
 
@@ -23,8 +23,8 @@ nano .env
 
 Further documentation can be found at [lancache.net](https://lancache.net/)
 
-## Test it
-http://diagnostics.lancache.net/
+<!-- ## Test it
+http://diagnostics.lancache.net/ -->
 
 ## Actions
 This repo uses Github Actions. Click the Actions tab to view the script output.

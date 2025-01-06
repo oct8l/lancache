@@ -4,14 +4,14 @@ env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*.*.*'
+  # push:
+  #   branches:
+  #     - main
+  #   tags:
+  #     - 'v*.*.*'
   workflow_dispatch:
-  schedule:
-    - cron: '30 4 1,15 * *'
+  # schedule:
+  #   - cron: '30 4 1,15 * *'
 
 jobs:
 
