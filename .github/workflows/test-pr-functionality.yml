@@ -31,7 +31,7 @@ jobs:
           - epic-games
           - origin
           - battle-net
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -147,13 +147,13 @@ jobs:
           response1=$(curl -s -w "%{http_code}" -o /dev/null \
             -H "Host: $(echo $test_url | cut -d'/' -f3)" \
             http://127.0.0.1:8080/depot/test-file || echo "000")
-          
+
           # Check if cache is working by examining headers
           echo "Checking cache status..."
           cache_status=$(curl -s -I \
             -H "Host: $(echo $test_url | cut -d'/' -f3)" \
             http://127.0.0.1:8080/depot/test-file | grep -i "x-cache" || echo "no-cache-header")
-          
+
           echo "Cache status: $cache_status"
           echo "✅ Cache functionality test completed for ${{ matrix.test-scenario }}"
 
@@ -198,7 +198,7 @@ jobs:
       - name: Test ARM64 images
         run: |
           echo "Testing ARM64 images can be pulled and started..."
-          
+
           # Create test directories
           mkdir -p test-cache/cache test-cache/logs
           chmod 777 test-cache/cache test-cache/logs
@@ -262,19 +262,19 @@ jobs:
         run: |
           echo "## 🧪 LanCache PR Functionality Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [[ "${{ needs.functional-test-amd64.result }}" == "success" ]]; then
             echo "✅ **AMD64 Functional Tests**: PASSED" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **AMD64 Functional Tests**: FAILED" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           if [[ "${{ needs.functional-test-arm64.result }}" == "success" ]]; then
             echo "✅ **ARM64 Compatibility Tests**: PASSED" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **ARM64 Compatibility Tests**: FAILED" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Test Details:**" >> $GITHUB_STEP_SUMMARY
           echo "- DNS resolution for gaming CDNs" >> $GITHUB_STEP_SUMMARY
