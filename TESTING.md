@@ -193,13 +193,14 @@ required_status_checks:
 **2. DNS resolution failures**
 
 - **Symptom**: DNS queries return SOA records instead of cache IP
-- **Root Cause**: DNS container not properly intercepting gaming CDN domains
+- **Root Cause**: DNS container not properly intercepting gaming CDN domains or testing wrong domains
 - **Debug Steps**:
-  - Check DNS container logs: `docker compose logs dns | grep "cache-domains"`
+  - Check DNS container logs: `docker compose logs dns | grep "bootstrapping"`
   - Verify environment variables: `docker compose exec dns env | grep LANCACHE`
-  - Test DNS directly: `dig @127.0.0.1 -p 5353 steamcontent.com`
-  - Check bind configuration: `docker compose exec dns cat /etc/bind/named.conf.local`
-  - Verify cache domains directory: `docker compose exec dns ls -la /cache-domains/`
+  - Test correct domains from inside container: `docker compose exec dns dig @127.0.0.1 +short download.epicgames.com`
+  - Check RPZ configuration: `docker compose exec dns cat /etc/bind/cache/rpz.db | head -20`
+  - Verify cache domains directory: `docker compose exec dns ls -la /opt/cache-domains/`
+  - **Important**: Only test domains listed in `/etc/bind/cache/rpz.db`, not raw CDN domains
 - **Solution**: Ensure proper environment variables and private IP addresses are used
 
 **3. Cache performance variations**

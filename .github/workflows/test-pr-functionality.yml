@@ -47,7 +47,6 @@ jobs:
           # Create test .env file with proper private IP addresses
           cat > test.env << EOF
           LANCACHE_IP=10.0.0.100
-          DNS_BIND_IP=10.0.0.100
           CACHE_ROOT=$PWD/test-cache
           CACHE_MAX_AGE=3650d
           USE_GENERIC_CACHE=true
@@ -122,8 +121,9 @@ jobs:
           docker compose -f test-compose.yml logs dns
 
           echo "=== DNS Configuration Check ==="
-          docker compose -f test-compose.yml exec -T dns ls -la /cache-domains/ || echo "Cache domains directory not found"
-          docker compose -f test-compose.yml exec -T dns cat /etc/bind/named.conf.local || echo "Bind config not found"
+          docker compose -f test-compose.yml exec -T dns ls -la /opt/cache-domains/ || echo "Cache domains directory not found"
+          docker compose -f test-compose.yml exec -T dns cat /etc/bind/cache.conf || echo "Bind cache config not found"
+          docker compose -f test-compose.yml exec -T dns head -20 /etc/bind/cache/rpz.db || echo "RPZ config not found"
 
           # Wait for healthy status with longer timeout
           echo "Waiting for containers to be healthy..."
@@ -138,23 +138,23 @@ jobs:
         run: |
           echo "Testing DNS resolution for CDN domains..."
 
-          # Test domains that should resolve to our cache
+          # Test domains that are actually configured in the RPZ
           test_domains=(
-            "steamcontent.com"
-            "content.steampowered.com"
+            "lancache.steamcontent.com"
             "download.epicgames.com"
             "origin-a.akamaihd.net"
             "blzddist1-a.akamaihd.net"
+            "*.cdn.ubi.com"
           )
 
           for domain in "${test_domains[@]}"; do
             echo "Testing $domain..."
-            # Use dig for better DNS testing with port specification
-            result=$(dig @127.0.0.1 -p 5353 +short $domain | head -1)
+            # Test DNS from within the Docker network using docker compose exec
+            result=$(docker compose -f test-compose.yml exec -T dns dig @127.0.0.1 +short $domain | tail -1 | tr -d '\r')
             if [ "$result" != "10.0.0.100" ]; then
               echo "❌ DNS test failed for $domain - got '$result', expected '10.0.0.100'"
               echo "Debug: Full dig output:"
-              dig @127.0.0.1 -p 5353 $domain
+              docker compose -f test-compose.yml exec -T dns dig @127.0.0.1 $domain
               exit 1
             else
               echo "✅ DNS resolution working for $domain"
@@ -247,7 +247,6 @@ jobs:
           # Create test .env file with proper private IP addresses
           cat > test.env << EOF
           LANCACHE_IP=10.0.0.100
-          DNS_BIND_IP=10.0.0.100
           CACHE_ROOT=$PWD/test-cache
           CACHE_MAX_AGE=3650d
           USE_GENERIC_CACHE=true
