@@ -192,15 +192,33 @@ required_status_checks:
 
 **2. DNS resolution failures**
 
-- Check upstream DNS configuration changes
-- Verify test domains are still valid for gaming CDNs
+- **Symptom**: DNS queries return SOA records instead of cache IP
+- **Root Cause**: DNS container not properly intercepting gaming CDN domains
+- **Debug Steps**:
+  - Check DNS container logs: `docker compose logs dns | grep "cache-domains"`
+  - Verify environment variables: `docker compose exec dns env | grep LANCACHE`
+  - Test DNS directly: `dig @127.0.0.1 -p 5353 steamcontent.com`
+  - Check bind configuration: `docker compose exec dns cat /etc/bind/named.conf.local`
+  - Verify cache domains directory: `docker compose exec dns ls -la /cache-domains/`
+- **Solution**: Ensure proper environment variables and private IP addresses are used
 
 **3. Cache performance variations**
 
 - Performance tests include variance tolerance
 - Check for GitHub Actions runner resource constraints
 
-**4. Security scan failures**
+**4. Container startup issues**
+
+- **Symptom**: DNS container constantly restarting with "IP address not valid" error
+- **Root Cause**: LanCache DNS requires RFC 1918 private IP addresses
+- **Solution**: Use proper private IPs:
+  - ✅ `10.0.0.100` (Class A private)
+  - ✅ `192.168.1.100` (Class C private) 
+  - ✅ `172.16.0.100` (Class B private)
+  - ❌ `127.0.0.1` (localhost - not valid)
+  - ❌ `8.8.8.8` (public IP - not valid)
+
+**5. Security scan failures**
 
 - Review Trivy output for actual vulnerabilities
 - Update base images if critical vulnerabilities found

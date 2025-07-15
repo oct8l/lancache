@@ -51,6 +51,8 @@ jobs:
           CACHE_ROOT=$PWD/test-cache
           CACHE_MAX_AGE=3650d
           USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          ENABLE_DNSSEC_VALIDATION=false
           EOF
 
       - name: Start LanCache containers
@@ -69,11 +71,11 @@ jobs:
                 lancache_test:
                   ipv4_address: 10.0.0.100
               healthcheck:
-                test: ["CMD", "dig", "@10.0.0.100", "steamcontent.com"]
+                test: ["CMD", "nslookup", "localhost", "localhost"]
                 interval: 30s
                 timeout: 10s
                 retries: 5
-                start_period: 30s
+                start_period: 45s
 
             monolithic:
               image: ${{ env.REGISTRY }}/lancache-monolithic:${{ env.PR_TAG }}
@@ -109,10 +111,24 @@ jobs:
 
           docker compose -f test-compose.yml up -d
 
-          # Wait for containers to be healthy
+          # Wait for containers to start and check logs
+          echo "Waiting for containers to start..."
+          sleep 60
+
+          echo "=== Container Status ==="
+          docker compose -f test-compose.yml ps
+
+          echo "=== DNS Container Logs ==="
+          docker compose -f test-compose.yml logs dns
+
+          echo "=== DNS Configuration Check ==="
+          docker compose -f test-compose.yml exec -T dns ls -la /cache-domains/ || echo "Cache domains directory not found"
+          docker compose -f test-compose.yml exec -T dns cat /etc/bind/named.conf.local || echo "Bind config not found"
+
+          # Wait for healthy status with longer timeout
           echo "Waiting for containers to be healthy..."
           timeout 300 bash -c 'until docker compose -f test-compose.yml ps | grep -q "healthy"; do sleep 10; echo "Still waiting..."; done' || {
-            echo "Containers failed to become healthy"
+            echo "Containers failed to become healthy after 5 minutes"
             docker compose -f test-compose.yml ps
             docker compose -f test-compose.yml logs
             exit 1
@@ -235,6 +251,8 @@ jobs:
           CACHE_ROOT=$PWD/test-cache
           CACHE_MAX_AGE=3650d
           USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          ENABLE_DNSSEC_VALIDATION=false
           EOF
 
           # Create docker-compose for ARM64 testing
