@@ -213,7 +213,7 @@ required_status_checks:
 - **Root Cause**: LanCache DNS requires RFC 1918 private IP addresses
 - **Solution**: Use proper private IPs:
   - ✅ `10.0.0.100` (Class A private)
-  - ✅ `192.168.1.100` (Class C private) 
+  - ✅ `192.168.1.100` (Class C private)
   - ✅ `172.16.0.100` (Class B private)
   - ❌ `127.0.0.1` (localhost - not valid)
   - ❌ `8.8.8.8` (public IP - not valid)
