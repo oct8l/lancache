@@ -3,24 +3,5 @@
   "extends": [
     "config:recommended"
   ],
-  "rangeStrategy": "pin",
-  "packageRules": [
-    {
-      "matchCategories": [
-        "docker"
-      ],
-      "pinDigests": true
-    },
-    {
-      "matchDatasources": [
-        "docker"
-      ],
-      "matchUpdateTypes": [
-        "major",
-        "minor",
-        "patch"
-      ],
-      "enabled": true
-    }
-  ]
+  "rangeStrategy": "pin"
 }
