@@ -4,22 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       test_target:
-        description: 'Test target'
+        description: "Test target"
         required: false
-        default: 'latest'
+        default: "latest"
         type: choice
         options:
           - latest
           - pr
           - custom
       custom_tag:
-        description: 'Custom image tag (if test_target is custom)'
+        description: "Custom image tag (if test_target is custom)"
         required: false
-        default: ''
+        default: ""
       load_level:
-        description: 'Load test intensity'
+        description: "Load test intensity"
         required: false
-        default: 'medium'
+        default: "medium"
         type: choice
         options:
           - light
@@ -34,7 +34,7 @@ jobs:
   performance-test:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -43,11 +43,11 @@ jobs:
           # Install performance testing tools
           sudo apt-get update
           sudo apt-get install -y apache2-utils wrk curl jq
-          
+
           # Create test environment
           mkdir -p perf-cache/cache perf-cache/logs test-data
           chmod 777 perf-cache/cache perf-cache/logs
-          
+
           # Create performance test configuration
           cat > perf-test.env << EOF
           LANCACHE_IP=127.0.0.1
@@ -119,9 +119,9 @@ jobs:
                 retries: 3
                 start_period: 60s
           EOF
-          
+
           docker compose -f perf-compose.yml up -d
-          
+
           # Wait for containers to be healthy
           echo "Waiting for containers to be healthy..."
           timeout 300 bash -c 'until docker compose -f perf-compose.yml ps | grep -q "healthy"; do sleep 5; echo "Still waiting..."; done'
@@ -129,33 +129,33 @@ jobs:
       - name: Create test content
         run: |
           echo "Creating test content for performance testing..."
-          
+
           # Create various sizes of test files
           mkdir -p test-content
-          
+
           # Small files (1KB to 1MB)
           dd if=/dev/urandom of=test-content/small-1kb.bin bs=1024 count=1
           dd if=/dev/urandom of=test-content/small-100kb.bin bs=1024 count=100
           dd if=/dev/urandom of=test-content/medium-1mb.bin bs=1048576 count=1
-          
+
           # Larger files (simulating game content)
           dd if=/dev/urandom of=test-content/large-10mb.bin bs=1048576 count=10
           dd if=/dev/urandom of=test-content/large-50mb.bin bs=1048576 count=50
-          
+
           # Host files via simple HTTP server for cache testing
           cd test-content
           python3 -m http.server 8081 &
           TEST_SERVER_PID=$!
           echo "TEST_SERVER_PID=$TEST_SERVER_PID" >> $GITHUB_ENV
           cd ..
-          
+
           # Wait for test server to start
           sleep 2
 
       - name: DNS Performance Test
         run: |
           echo "Running DNS performance tests..."
-          
+
           # Test domains for resolution
           test_domains=(
             "steamcontent.com"
@@ -166,10 +166,10 @@ jobs:
             "dist.blizzard.com"
             "level3.ssl.blizzard.com"
           )
-          
+
           total_time=0
           successful_queries=0
-          
+
           for domain in "${test_domains[@]}"; do
             echo "Testing $domain..."
             start_time=$(date +%s%N)
@@ -185,7 +185,7 @@ jobs:
               echo "❌ $domain failed to resolve correctly"
             fi
           done
-          
+
           if [ $successful_queries -gt 0 ]; then
             avg_time=$((total_time / successful_queries))
             echo "📊 DNS Performance Summary:" >> $GITHUB_STEP_SUMMARY
@@ -204,7 +204,7 @@ jobs:
       - name: HTTP Performance Test
         run: |
           echo "Running HTTP performance tests..."
-          
+
           # Basic response time test
           echo "Testing basic HTTP response times..."
           for i in {1..10}; do
@@ -212,57 +212,57 @@ jobs:
             echo "Request $i: ${response_time}s"
           done
 
-             - name: Cache Performance Test  
-         run: |
-           echo "Running cache performance tests..."
+      - name: Cache Performance Test
+        run: |
+          echo "Running cache performance tests..."
            
            # Test cache miss vs cache hit performance
            test_files=("small-1kb.bin" "small-100kb.bin" "medium-1mb.bin")
            
-           for file in "${test_files[@]}"; do
-             echo "Testing cache performance for $file..."
-             
-             # Configure nginx to proxy to our test server for this file
-             docker compose -f perf-compose.yml exec -T monolithic sh -c '
-               mkdir -p /etc/nginx/sites-available/cache.conf.d/
-               cat > /etc/nginx/sites-available/cache.conf.d/test-'$file'.conf << EOF
-           location /'$file' {
-               proxy_pass http://host.docker.internal:8081/'$file';
-               include /etc/nginx/sites-available/cache.conf.d/root/*.conf;
-           }
-           EOF
-               nginx -s reload
-             '
-             
-             # Test cache miss (first request)
-             echo "Testing cache miss for $file..."
-             miss_start=$(date +%s%N)
-             curl -s -o /dev/null http://127.0.0.1:8080/$file
-             miss_end=$(date +%s%N)
-             miss_time=$(( (miss_end - miss_start) / 1000000 ))
-             
-             # Small delay to ensure cache write completes
-             sleep 1
-             
-             # Test cache hit (second request)
-             echo "Testing cache hit for $file..."
-             hit_start=$(date +%s%N)
-             curl -s -o /dev/null http://127.0.0.1:8080/$file
-             hit_end=$(date +%s%N)
-             hit_time=$(( (hit_end - hit_start) / 1000000 ))
-             
-             improvement_ratio=$(echo "scale=2; $miss_time / $hit_time" | bc)
-             
-             echo "📊 Cache Performance for $file:" >> $GITHUB_STEP_SUMMARY
-             echo "- Cache miss: ${miss_time}ms" >> $GITHUB_STEP_SUMMARY
-             echo "- Cache hit: ${hit_time}ms" >> $GITHUB_STEP_SUMMARY
-             echo "- Speed improvement: ${improvement_ratio}x" >> $GITHUB_STEP_SUMMARY
-           done
+          for file in "${test_files[@]}"; do
+            echo "Testing cache performance for $file..."
+            
+            # Configure nginx to proxy to our test server for this file
+            docker compose -f perf-compose.yml exec -T monolithic sh -c '
+              mkdir -p /etc/nginx/sites-available/cache.conf.d/
+              cat > /etc/nginx/sites-available/cache.conf.d/test-'$file'.conf << EOF
+          location /'$file' {
+              proxy_pass http://host.docker.internal:8081/'$file';
+              include /etc/nginx/sites-available/cache.conf.d/root/*.conf;
+          }
+          EOF
+              nginx -s reload
+            '
+            
+            # Test cache miss (first request)
+            echo "Testing cache miss for $file..."
+            miss_start=$(date +%s%N)
+            curl -s -o /dev/null http://127.0.0.1:8080/$file
+            miss_end=$(date +%s%N)
+            miss_time=$(( (miss_end - miss_start) / 1000000 ))
+            
+            # Small delay to ensure cache write completes
+            sleep 1
+            
+            # Test cache hit (second request)
+            echo "Testing cache hit for $file..."
+            hit_start=$(date +%s%N)
+            curl -s -o /dev/null http://127.0.0.1:8080/$file
+            hit_end=$(date +%s%N)
+            hit_time=$(( (hit_end - hit_start) / 1000000 ))
+            
+            improvement_ratio=$(echo "scale=2; $miss_time / $hit_time" | bc)
+            
+            echo "📊 Cache Performance for $file:" >> $GITHUB_STEP_SUMMARY
+            echo "- Cache miss: ${miss_time}ms" >> $GITHUB_STEP_SUMMARY
+            echo "- Cache hit: ${hit_time}ms" >> $GITHUB_STEP_SUMMARY
+            echo "- Speed improvement: ${improvement_ratio}x" >> $GITHUB_STEP_SUMMARY
+          done
 
       - name: Load Test
         run: |
           echo "Running load tests..."
-          
+
           # Set load test parameters based on input
           case "${{ inputs.load_level }}" in
             "light")
@@ -291,19 +291,19 @@ jobs:
               threads=4
               ;;
           esac
-          
+
           echo "Running load test with $connections connections, $threads threads for ${duration}s..."
-          
+
           # Test with Apache Bench
           echo "Running Apache Bench test..."
           ab -n 1000 -c $connections -t $duration http://127.0.0.1:8080/lancache-heartbeat > ab_results.txt 2>&1 || true
-          
+
           # Test with wrk if available
           if command -v wrk &> /dev/null; then
             echo "Running wrk test..."
             wrk -t$threads -c$connections -d${duration}s http://127.0.0.1:8080/lancache-heartbeat > wrk_results.txt 2>&1 || true
           fi
-          
+
           # Parse and display results
           if [ -f ab_results.txt ]; then
             echo "📊 Apache Bench Results:" >> $GITHUB_STEP_SUMMARY
@@ -315,7 +315,7 @@ jobs:
             echo "- Mean time per request: ${mean_time}ms" >> $GITHUB_STEP_SUMMARY
             echo "- Failed requests: $failed_requests" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           if [ -f wrk_results.txt ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "📊 wrk Results:" >> $GITHUB_STEP_SUMMARY
@@ -326,15 +326,15 @@ jobs:
       - name: Memory and Resource Usage
         run: |
           echo "Checking memory and resource usage..."
-          
+
           # Get container resource usage
           docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" > resource_usage.txt
-          
+
           echo "📊 Resource Usage:" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat resource_usage.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          
+
           # Check cache size
           cache_size=$(du -sh perf-cache/cache | cut -f1)
           echo "- Cache size: $cache_size" >> $GITHUB_STEP_SUMMARY
@@ -369,10 +369,10 @@ jobs:
           if [ -n "$TEST_SERVER_PID" ]; then
             kill $TEST_SERVER_PID || true
           fi
-          
+
           # Stop containers
           docker compose -f perf-compose.yml down -v || true
-          
+
           # Clean up test files
           rm -rf perf-cache test-content perf-test.env perf-compose.yml
-          rm -f ab_results.txt wrk_results.txt resource_usage.txt wrk_summary.txt 
+          rm -f ab_results.txt wrk_results.txt resource_usage.txt wrk_summary.txt
