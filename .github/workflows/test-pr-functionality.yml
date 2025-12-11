@@ -1,0 +1,374 @@
+name: PR Functionality Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  PR_TAG: pr-${{ github.event.pull_request.number }}
+
+jobs:
+  wait-for-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for PR build to complete
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Wait for build workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Waiting for PR build workflow to complete..."
+
+          # Wait up to 30 minutes for the build to complete
+          max_wait=1800
+          elapsed=0
+          check_interval=30
+
+          while [ $elapsed -lt $max_wait ]; do
+            # Get the status of the PR build workflow for this commit
+            build_status=$(gh api \
+              repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs \
+              --jq '.check_runs[] | select(.name == "build") | .status')
+
+            build_conclusion=$(gh api \
+              repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs \
+              --jq '.check_runs[] | select(.name == "build") | .conclusion')
+
+            echo "Build status: $build_status, conclusion: $build_conclusion"
+
+            if [ "$build_status" = "completed" ]; then
+              if [ "$build_conclusion" = "success" ]; then
+                echo "✅ Build completed successfully!"
+                exit 0
+              else
+                echo "❌ Build failed with conclusion: $build_conclusion"
+                exit 1
+              fi
+            fi
+
+            echo "Build still in progress... waiting ${check_interval}s (${elapsed}s elapsed)"
+            sleep $check_interval
+            elapsed=$((elapsed + check_interval))
+          done
+
+          echo "❌ Timeout waiting for build to complete after ${max_wait}s"
+          exit 1
+
+  functional-test-amd64:
+    needs: wait-for-build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-scenario:
+          - steam
+          - epic-games
+          - origin
+          - battle-net
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up test environment
+        run: |
+          # Create test directories
+          mkdir -p test-cache/cache test-cache/logs
+          chmod 777 test-cache/cache test-cache/logs
+
+          # Create test .env file with proper private IP addresses
+          cat > test.env << EOF
+          LANCACHE_IP=10.0.0.100
+          CACHE_ROOT=$PWD/test-cache
+          CACHE_MAX_AGE=3650d
+          USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          ENABLE_DNSSEC_VALIDATION=false
+          EOF
+
+      - name: Start LanCache containers
+        run: |
+          # Create test docker-compose.yml with PR images
+          cat > test-compose.yml << 'EOF'
+          services:
+            dns:
+              image: ${{ env.REGISTRY }}/lancache-dns:${{ env.PR_TAG }}
+              env_file: test.env
+              ports:
+                - "127.0.0.1:5353:53/udp"
+                - "127.0.0.1:5353:53/tcp"
+              restart: unless-stopped
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.100
+              healthcheck:
+                test: ["CMD", "nslookup", "localhost", "localhost"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 45s
+
+            monolithic:
+              image: ${{ env.REGISTRY }}/lancache-monolithic:${{ env.PR_TAG }}
+              env_file: test.env
+              ports:
+                - "127.0.0.1:8080:80/tcp"
+                - "127.0.0.1:8443:443/tcp"
+              restart: unless-stopped
+              volumes:
+                - ./test-cache/cache:/data/cache
+                - ./test-cache/logs:/data/logs
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.101
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://10.0.0.101/lancache-heartbeat"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 60s
+
+          networks:
+            lancache_test:
+              driver: bridge
+              ipam:
+                config:
+                  - subnet: 10.0.0.0/24
+          EOF
+
+          # Replace environment variables in the compose file
+          envsubst < test-compose.yml > test-compose-final.yml
+          mv test-compose-final.yml test-compose.yml
+
+          docker compose -f test-compose.yml up -d
+
+          # Wait for containers to start and check logs
+          echo "Waiting for containers to start..."
+          sleep 60
+
+          echo "=== Container Status ==="
+          docker compose -f test-compose.yml ps
+
+          echo "=== DNS Container Logs ==="
+          docker compose -f test-compose.yml logs dns
+
+          echo "=== DNS Configuration Check ==="
+          docker compose -f test-compose.yml exec -T dns ls -la /opt/cache-domains/ || echo "Cache domains directory not found"
+          docker compose -f test-compose.yml exec -T dns cat /etc/bind/cache.conf || echo "Bind cache config not found"
+          docker compose -f test-compose.yml exec -T dns head -20 /etc/bind/cache/rpz.db || echo "RPZ config not found"
+
+          # Wait for healthy status with longer timeout
+          echo "Waiting for containers to be healthy..."
+          timeout 300 bash -c 'until docker compose -f test-compose.yml ps | grep -q "healthy"; do sleep 10; echo "Still waiting..."; done' || {
+            echo "Containers failed to become healthy after 5 minutes"
+            docker compose -f test-compose.yml ps
+            docker compose -f test-compose.yml logs
+            exit 1
+          }
+
+      - name: Test DNS resolution
+        run: |
+          echo "Testing DNS resolution for CDN domains..."
+
+          # Test domains that are actually configured in the RPZ
+          test_domains=(
+            "lancache.steamcontent.com"
+            "download.epicgames.com"
+            "origin-a.akamaihd.net"
+            "blzddist1-a.akamaihd.net"
+            "uplaypc-s-ubisoft.cdn.ubi.com"
+          )
+
+          for domain in "${test_domains[@]}"; do
+            echo "Testing $domain..."
+            # Test DNS from within the Docker network using nslookup
+            result=$(docker compose -f test-compose.yml exec -T dns nslookup $domain 127.0.0.1 2>/dev/null | grep "^Address:" | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "$result" != "10.0.0.100" ]; then
+              echo "❌ DNS test failed for $domain - got '$result', expected '10.0.0.100'"
+              echo "Debug: Full nslookup output:"
+              docker compose -f test-compose.yml exec -T dns nslookup $domain 127.0.0.1
+              exit 1
+            else
+              echo "✅ DNS resolution working for $domain"
+            fi
+          done
+
+      - name: Test cache functionality
+        run: |
+          echo "Testing cache functionality for ${{ matrix.test-scenario }}..."
+
+          # Test the lancache-heartbeat endpoint with appropriate Host header
+          case "${{ matrix.test-scenario }}" in
+            "steam")
+              host_header="steamcontent.com"
+              ;;
+            "epic-games")
+              host_header="download.epicgames.com"
+              ;;
+            "origin")
+              host_header="origin-a.akamaihd.net"
+              ;;
+            "battle-net")
+              host_header="blzddist1-a.akamaihd.net"
+              ;;
+          esac
+
+          # Test that the cache is accessible and responding with the correct Host header
+          echo "Testing cache with Host: $host_header"
+          response=$(curl -H "Host: $host_header" -s -w "%{http_code}" -o /dev/null http://127.0.0.1:8080/lancache-heartbeat)
+          
+          # Accept both 200 (OK) and 204 (No Content) as valid responses
+          if [ "$response" = "200" ] || [ "$response" = "204" ]; then
+            echo "✅ Cache is accessible and responding for ${{ matrix.test-scenario }} (HTTP $response)"
+          else
+            echo "❌ Cache test failed for ${{ matrix.test-scenario }} - HTTP $response"
+            echo "Container logs:"
+            docker compose -f test-compose.yml logs monolithic | tail -20
+            exit 1
+          fi
+
+      - name: Check container health and logs
+        run: |
+          echo "=== Container Status ==="
+          docker compose -f test-compose.yml ps
+
+          echo "=== DNS Container Logs ==="
+          docker compose -f test-compose.yml logs dns | tail -50
+
+          echo "=== Monolithic Container Logs ==="
+          docker compose -f test-compose.yml logs monolithic | tail -50
+
+          # Check for critical errors (excluding normal nginx config directives)
+          if docker compose -f test-compose.yml logs | grep -i "fatal\|critical" | grep -v -E "(error_log|error_page|proxy_intercept_errors|configuration)"; then
+            echo "❌ Critical errors found in logs"
+            exit 1
+          else
+            echo "✅ No critical errors in container logs"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f test-compose.yml down -v || true
+          rm -rf test-cache test.env test-compose.yml test-content.txt || true
+
+  functional-test-arm64:
+    needs: wait-for-build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Test ARM64 image compatibility
+        run: |
+          echo "Testing ARM64 images can be pulled and started..."
+
+          # Create test directories
+          mkdir -p test-cache/cache test-cache/logs
+          chmod 777 test-cache/cache test-cache/logs
+
+          # Create test .env file with proper private IP addresses
+          cat > test.env << EOF
+          LANCACHE_IP=10.0.0.100
+          CACHE_ROOT=$PWD/test-cache
+          CACHE_MAX_AGE=3650d
+          USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          ENABLE_DNSSEC_VALIDATION=false
+          EOF
+
+          # Create docker-compose for ARM64 testing
+          cat > test-compose-arm64.yml << 'EOF'
+          services:
+            dns:
+              image: ${{ env.REGISTRY }}/lancache-dns:${{ env.PR_TAG }}
+              platform: linux/arm64
+              env_file: test.env
+              ports:
+                - "127.0.0.1:5353:53/udp"
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.100
+
+            monolithic:
+              image: ${{ env.REGISTRY }}/lancache-monolithic:${{ env.PR_TAG }}
+              platform: linux/arm64
+              env_file: test.env
+              ports:
+                - "127.0.0.1:8080:80/tcp"
+              volumes:
+                - ./test-cache/cache:/data/cache
+                - ./test-cache/logs:/data/logs
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.101
+
+          networks:
+            lancache_test:
+              driver: bridge
+              ipam:
+                config:
+                  - subnet: 10.0.0.0/24
+          EOF
+
+          # Replace environment variables
+          envsubst < test-compose-arm64.yml > test-compose-arm64-final.yml
+          mv test-compose-arm64-final.yml test-compose-arm64.yml
+
+          # Test that ARM64 images can be pulled and started
+          echo "Testing ARM64 image pull..."
+          docker compose -f test-compose-arm64.yml pull
+
+          echo "Testing ARM64 containers start..."
+          timeout 180 docker compose -f test-compose-arm64.yml up -d
+
+          # Wait briefly for startup
+          sleep 30
+
+          echo "Checking ARM64 container status..."
+          docker compose -f test-compose-arm64.yml ps
+
+          echo "✅ ARM64 images are compatible"
+
+          # Cleanup
+          docker compose -f test-compose-arm64.yml down -v || true
+          rm -rf test-cache test.env test-compose-arm64.yml || true
+
+  test-summary:
+    needs: [functional-test-amd64, functional-test-arm64]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Test Results Summary
+        run: |
+          echo "## 🧪 LanCache PR Functionality Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.functional-test-amd64.result }}" == "success" ]]; then
+            echo "✅ **AMD64 Functional Tests**: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **AMD64 Functional Tests**: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.functional-test-arm64.result }}" == "success" ]]; then
+            echo "✅ **ARM64 Compatibility Tests**: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **ARM64 Compatibility Tests**: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Details:**" >> $GITHUB_STEP_SUMMARY
+          echo "- DNS resolution for gaming CDNs" >> $GITHUB_STEP_SUMMARY
+          echo "- Cache functionality simulation" >> $GITHUB_STEP_SUMMARY
+          echo "- Multi-architecture support" >> $GITHUB_STEP_SUMMARY
+          echo "- Container health checks" >> $GITHUB_STEP_SUMMARY
