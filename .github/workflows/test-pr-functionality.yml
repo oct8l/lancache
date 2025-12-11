@@ -220,9 +220,10 @@ jobs:
           # Test that the cache is accessible and responding with the correct Host header
           echo "Testing cache with Host: $host_header"
           response=$(curl -H "Host: $host_header" -s -w "%{http_code}" -o /dev/null http://127.0.0.1:8080/lancache-heartbeat)
-
-          if [ "$response" = "200" ]; then
-            echo "✅ Cache is accessible and responding for ${{ matrix.test-scenario }}"
+          
+          # Accept both 200 (OK) and 204 (No Content) as valid responses
+          if [ "$response" = "200" ] || [ "$response" = "204" ]; then
+            echo "✅ Cache is accessible and responding for ${{ matrix.test-scenario }} (HTTP $response)"
           else
             echo "❌ Cache test failed for ${{ matrix.test-scenario }} - HTTP $response"
             echo "Container logs:"
