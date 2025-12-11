@@ -1,15 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "rangeStrategy": "pin",
-  "docker": {
-    "pinDigests": true
-  },
-  "packageRules": [
-    {
-      "matchDatasources": ["docker"],
-      "matchUpdateTypes": ["major", "minor", "patch"],
-      "enabled": true
-    }
-  ]
+  "extends": [
+    "config:recommended"
+  ],
+  "rangeStrategy": "pin"
 }
