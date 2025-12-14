@@ -1,11 +1,17 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>c-gerke/renovate-config"],
+  "extends": [
+    "github>c-gerke/renovate-config"
+  ],
   "packageRules": [
     {
-      "matchDatasources": ["docker"],
-      "matchPackagePatterns": ["^ghcr\\.io/oct8l/"],
-      "pinDigests": false
+      "matchDatasources": [
+        "docker"
+      ],
+      "pinDigests": false,
+      "matchPackageNames": [
+        "/^ghcr\\.io/oct8l//"
+      ]
     }
   ]
 }
