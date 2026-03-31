@@ -19,12 +19,14 @@
   ],
   "packageRules": [
     {
+      "description": "Images built from this repo — do not pin digests",
       "matchDatasources": [
         "docker"
       ],
       "matchPackageNames": [
-        "/^ghcr\\.io/oct8l//"
-      ]
+        "/^ghcr\\.io\\/oct8l\\/lancache/"
+      ],
+      "pinDigests": false
     }
   ]
 }
