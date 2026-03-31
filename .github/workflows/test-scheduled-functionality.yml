@@ -19,6 +19,7 @@ on:
 env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
   TEST_TAG: pre-release-test-${{ github.run_number }}
+  TRIVY_VERSION: v0.69.3
 
 jobs:
   pre-build-test:
@@ -202,8 +203,9 @@ jobs:
         run: |
           echo "Running security scans on test images..."
 
-          # Install Trivy for vulnerability scanning
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /tmp/trivy
+          TRIVY_VER="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VER}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          tar -xzf /tmp/trivy.tgz -C /tmp
 
           # Scan key images
           scan_passed=true
@@ -215,7 +217,7 @@ jobs:
 
           for image in "${images[@]}"; do
             echo "Scanning $image..."
-            /tmp/trivy/trivy image --exit-code 1 --severity HIGH,CRITICAL --quiet $image
+            /tmp/trivy image --exit-code 1 --severity HIGH,CRITICAL --quiet $image
             if [ $? -ne 0 ]; then
               echo "❌ Security scan failed for $image"
               scan_passed=false
