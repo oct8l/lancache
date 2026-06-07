@@ -7,8 +7,8 @@
     {
       "customType": "regex",
       "description": "Trivy CLI pinned in scheduled workflow",
-      "fileMatch": [
-        "^\\.github/workflows/test-scheduled-functionality\\.ya?ml$"
+      "managerFilePatterns": [
+        "/^\\.github/workflows/test-scheduled-functionality\\.ya?ml$/"
       ],
       "matchStrings": [
         "TRIVY_VERSION:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
