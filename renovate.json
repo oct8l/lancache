@@ -3,15 +3,30 @@
   "extends": [
     "github>c-gerke/renovate-config"
   ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Trivy CLI pinned in scheduled workflow",
+      "fileMatch": [
+        "^\\.github/workflows/test-scheduled-functionality\\.ya?ml$"
+      ],
+      "matchStrings": [
+        "TRIVY_VERSION:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasource": "github-releases",
+      "packageName": "aquasecurity/trivy"
+    }
+  ],
   "packageRules": [
     {
+      "description": "Images built from this repo — do not pin digests",
       "matchDatasources": [
         "docker"
       ],
-      "pinDigests": false,
       "matchPackageNames": [
-        "/^ghcr\\.io/oct8l//"
-      ]
+        "/^ghcr\\.io\\/oct8l\\/lancache/"
+      ],
+      "pinDigests": false
     }
   ]
 }
