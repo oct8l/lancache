@@ -139,7 +139,7 @@ jobs:
 
           # Test 1: DNS Resolution
           echo "Testing DNS resolution..."
-          result=$(nslookup steamcontent.com 127.0.0.1:5353 | grep "Address:" | tail -1 | awk '{print $2}')
+          result=$(dig @127.0.0.1 -p 5353 steamcontent.com +short | head -1)
           if [ "$result" != "127.0.0.1" ]; then
             echo "❌ DNS test failed - got $result, expected 127.0.0.1"
             test_passed=false
@@ -150,11 +150,12 @@ jobs:
           # Test 2: HTTP Response
           echo "Testing HTTP response..."
           response=$(curl -s -w "%{http_code}" -o /dev/null http://127.0.0.1:8080/lancache-heartbeat)
-          if [ "$response" != "200" ]; then
-            echo "❌ HTTP test failed - got $response, expected 200"
+          # Accept any 2xx status code (heartbeat endpoint returns 204 No Content)
+          if [[ "$response" -lt 200 || "$response" -ge 300 ]]; then
+            echo "❌ HTTP test failed - got $response, expected 2xx"
             test_passed=false
           else
-            echo "✅ HTTP response working"
+            echo "✅ HTTP response working (HTTP $response)"
           fi
 
           # Test 3: Container Logs for Errors
