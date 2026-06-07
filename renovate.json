@@ -13,8 +13,8 @@
       "matchStrings": [
         "TRIVY_VERSION:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
       ],
-      "datasource": "github-releases",
-      "packageName": "aquasecurity/trivy"
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "aquasecurity/trivy"
     }
   ],
   "packageRules": [
