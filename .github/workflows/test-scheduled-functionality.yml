@@ -81,13 +81,18 @@ jobs:
         run: |
           echo "Testing critical LanCache functionality with new images..."
 
+          # Detect a valid RFC 1918 IP (lancache-dns rejects loopback)
+          LANCACHE_IP=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
+          echo "Using LANCACHE_IP: $LANCACHE_IP"
+
           # Create test environment
           mkdir -p test-cache/cache test-cache/logs
           chmod 777 test-cache/cache test-cache/logs
 
           cat > test.env << EOF
-          LANCACHE_IP=127.0.0.1
-          DNS_BIND_IP=127.0.0.1
+          LANCACHE_IP=$LANCACHE_IP
+          DNS_BIND_IP=0.0.0.0
+          USE_GENERIC_CACHE=true
           CACHE_ROOT=$PWD/test-cache
           CACHE_MAX_AGE=3650d
           EOF
@@ -99,11 +104,11 @@ jobs:
               image: ${{ env.REGISTRY }}/lancache-dns:${{ env.TEST_TAG }}
               env_file: test.env
               ports:
-                - "127.0.0.1:5353:53/udp"
-                - "127.0.0.1:5353:53/tcp"
+                - "0.0.0.0:5353:53/udp"
+                - "0.0.0.0:5353:53/tcp"
               restart: always
               healthcheck:
-                test: ["CMD", "nslookup", "steamcontent.com", "127.0.0.1"]
+                test: ["CMD", "nslookup", "lancache.steamcontent.com", "127.0.0.1"]
                 interval: 30s
                 timeout: 10s
                 retries: 3
@@ -130,18 +135,18 @@ jobs:
           # Start containers
           docker compose -f test-compose.yml up -d
 
-          # Wait for health checks
+          # Wait for ALL containers to be healthy
           echo "Waiting for containers to be healthy..."
-          timeout 300 bash -c 'until docker compose -f test-compose.yml ps | grep -q "healthy"; do sleep 5; echo "Still waiting..."; done'
+          timeout 300 bash -c 'until [ "$(docker compose -f test-compose.yml ps | grep -c "(healthy)")" -ge 2 ]; do sleep 5; echo "Still waiting..."; done'
 
           # Test basic functionality
           test_passed=true
 
           # Test 1: DNS Resolution
           echo "Testing DNS resolution..."
-          result=$(dig @127.0.0.1 -p 5353 steamcontent.com +short | head -1)
-          if [ "$result" != "127.0.0.1" ]; then
-            echo "❌ DNS test failed - got $result, expected 127.0.0.1"
+          result=$(dig @127.0.0.1 -p 5353 lancache.steamcontent.com +noall +answer | awk '$4 == "A" {print $5}' | head -1)
+          if [ "$result" != "$LANCACHE_IP" ]; then
+            echo "❌ DNS test failed - got $result, expected $LANCACHE_IP"
             test_passed=false
           else
             echo "✅ DNS resolution working"
