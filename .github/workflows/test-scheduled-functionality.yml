@@ -223,12 +223,11 @@ jobs:
 
           for image in "${images[@]}"; do
             echo "Scanning $image..."
-            /tmp/trivy image --exit-code 1 --severity HIGH,CRITICAL --quiet $image
-            if [ $? -ne 0 ]; then
-              echo "❌ Security scan failed for $image"
-              scan_passed=false
-            else
+            if /tmp/trivy image --exit-code 1 --severity HIGH,CRITICAL --quiet "$image"; then
               echo "✅ Security scan passed for $image"
+            else
+              echo "❌ Security scan found vulnerabilities in $image"
+              scan_passed=false
             fi
           done
 
