@@ -19,7 +19,7 @@ on:
 env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
   TEST_TAG: pre-release-test-${{ github.run_number }}
-  TRIVY_VERSION: v0.71.2
+  TRIVY_VERSION: v0.72.0
 
 jobs:
   pre-build-test:
