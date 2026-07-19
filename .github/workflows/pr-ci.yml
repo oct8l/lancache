@@ -96,6 +96,11 @@ jobs:
         working-directory: tests/cache-integration
         run: docker compose down -v || true
 
+  # ARM64 "core integration" per the risk-based architecture matrix in
+  # TESTING.md: not the full deterministic content-cache suite (that's
+  # AMD64-only, above), but real health/exit-state assertions plus one DNS
+  # and one HTTP assertion under actual QEMU emulation -- not just trusting
+  # `docker compose ps` to notice a crash.
   functional-arm64:
     needs: build-candidates
     if: success() && github.event.pull_request.head.repo.full_name == github.repository
@@ -103,6 +108,9 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      DNS_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}
+      MONOLITHIC_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -113,23 +121,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Test ARM64 image compatibility
-        env:
-          DNS_IMAGE: ${{ env.REGISTRY }}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}
-          MONOLITHIC_IMAGE: ${{ env.REGISTRY }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
+      - name: Start ARM64 containers
         run: |
-          echo "Testing ARM64 images can be pulled and started..."
-
+          set -euo pipefail
           mkdir -p test-cache/cache test-cache/logs
           chmod 777 test-cache/cache test-cache/logs
 
-          cat > test.env << EOF
-          LANCACHE_IP=10.0.0.100
-          CACHE_ROOT=$PWD/test-cache
-          CACHE_MAX_AGE=3650d
+          cat > test.env << 'EOF'
+          LANCACHE_IP=10.55.0.11
           USE_GENERIC_CACHE=true
           UPSTREAM_DNS=8.8.8.8
           ENABLE_DNSSEC_VALIDATION=false
+          CACHE_MAX_AGE=3650d
           EOF
 
           cat > test-compose-arm64.yml << EOF
@@ -138,46 +141,104 @@ jobs:
               image: ${DNS_IMAGE}
               platform: linux/arm64
               env_file: test.env
-              ports:
-                - "127.0.0.1:5353:53/udp"
               networks:
                 lancache_test:
-                  ipv4_address: 10.0.0.100
+                  ipv4_address: 10.55.0.10
+              healthcheck:
+                test: ["CMD", "nslookup", "lancache.steamcontent.com", "127.0.0.1"]
+                interval: 10s
+                timeout: 10s
+                retries: 15
+                start_period: 30s
 
             monolithic:
               image: ${MONOLITHIC_IMAGE}
               platform: linux/arm64
               env_file: test.env
-              ports:
-                - "127.0.0.1:8080:80/tcp"
               volumes:
                 - ./test-cache/cache:/data/cache
                 - ./test-cache/logs:/data/logs
               networks:
                 lancache_test:
-                  ipv4_address: 10.0.0.101
+                  ipv4_address: 10.55.0.11
+              healthcheck:
+                test: ["CMD", "curl", "-fsS", "http://127.0.0.1/lancache-heartbeat"]
+                interval: 10s
+                timeout: 10s
+                retries: 15
+                start_period: 45s
 
           networks:
             lancache_test:
               driver: bridge
               ipam:
                 config:
-                  - subnet: 10.0.0.0/24
+                  - subnet: 10.55.0.0/24
           EOF
 
-          echo "Testing ARM64 image pull..."
-          docker compose -f test-compose-arm64.yml pull
+          docker compose -f test-compose-arm64.yml up -d
 
-          echo "Testing ARM64 containers start..."
-          timeout 180 docker compose -f test-compose-arm64.yml up -d
+      - name: Wait for containers to be healthy
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            dns_status=$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose -f test-compose-arm64.yml ps -q dns)")
+            mono_status=$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose -f test-compose-arm64.yml ps -q monolithic)")
+            echo "dns=${dns_status} monolithic=${mono_status}"
+            if [ "${dns_status}" = "healthy" ] && [ "${mono_status}" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "${dns_status}" = "unhealthy" ] || [ "${mono_status}" = "unhealthy" ]; then
+              echo "::error::a container reported unhealthy"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::containers did not become healthy in time"
+          exit 1
 
-          sleep 30
+      - name: Assert neither container has exited
+        run: |
+          set -euo pipefail
+          for svc in dns monolithic; do
+            cid=$(docker compose -f test-compose-arm64.yml ps -q "${svc}")
+            status=$(docker inspect --format '{{.State.Status}}' "${cid}")
+            if [ "${status}" != "running" ]; then
+              echo "::error::${svc} container is not running (status: ${status})"
+              exit 1
+            fi
+          done
+          echo "Both containers running"
 
-          echo "Checking ARM64 container status..."
+      - name: DNS assertion under ARM64 emulation
+        run: |
+          set -euo pipefail
+          result=$(docker compose -f test-compose-arm64.yml exec -T dns nslookup lancache.steamcontent.com 127.0.0.1 2>/dev/null | grep "^Address:" | tail -1 | awk '{print $2}' | tr -d '\r')
+          if [ "${result}" != "10.55.0.11" ]; then
+            echo "::error::expected lancache.steamcontent.com to resolve to 10.55.0.11 under ARM64, got '${result}'"
+            exit 1
+          fi
+          echo "DNS resolution OK under ARM64 emulation"
+
+      - name: HTTP assertion under ARM64 emulation
+        run: |
+          set -euo pipefail
+          status=$(docker compose -f test-compose-arm64.yml exec -T monolithic curl -s -o /dev/null -w '%{http_code}' -H 'Host: lancache.steamcontent.com' http://127.0.0.1/lancache-heartbeat)
+          if [ "${status}" != "200" ] && [ "${status}" != "204" ]; then
+            echo "::error::expected 200/204 from heartbeat under ARM64, got ${status}"
+            exit 1
+          fi
+          echo "HTTP heartbeat OK under ARM64 emulation (status ${status})"
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
           docker compose -f test-compose-arm64.yml ps
+          docker compose -f test-compose-arm64.yml logs
 
-          echo "✅ ARM64 images are compatible"
-
+      - name: Cleanup
+        if: always()
+        run: |
           docker compose -f test-compose-arm64.yml down -v || true
           rm -rf test-cache test.env test-compose-arm64.yml || true
 
