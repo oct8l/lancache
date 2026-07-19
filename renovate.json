@@ -6,9 +6,9 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Trivy CLI pinned in scheduled workflow",
+      "description": "Trivy CLI pinned in the release workflow",
       "managerFilePatterns": [
-        "/^\\.github/workflows/test-scheduled-functionality\\.ya?ml$/"
+        "/^\\.github/workflows/release\\.ya?ml$/"
       ],
       "matchStrings": [
         "TRIVY_VERSION:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"

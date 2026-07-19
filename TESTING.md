@@ -8,8 +8,10 @@ The testing system consists of four workflows that provide comprehensive validat
 
 1. **Validate** - Static validation of workflows, Compose, and Renovate config
 2. **PR CI** - Validates every pull request and gates merges via `ci-gate`
-3. **Scheduled Build Tests** - Pre-validates before scheduled releases
+3. **Release** - Builds, tests, and promotes release images via `release-gate`
 4. **Performance Tests** - Manual performance and load testing
+
+Candidate builds are shared: `build-candidates.yml` is a reusable workflow called by both **PR CI** and **Release**, so the same build logic (and its safety checks) runs regardless of which pipeline triggered it.
 
 ## Testing Workflows
 
@@ -70,37 +72,43 @@ The origin (`tests/cache-integration/origin/`) is a small Python HTTP server ser
 
 > **Known gap (tracked for a follow-up PR)**: cache revalidation (`proxy_cache_revalidate`) and stale-response-on-upstream-error (`proxy_cache_use_stale`) are not yet covered. Both need a short-TTL cache configuration to force staleness within test time, which is a distinct environment from the single shared stack used above (see Phase 2.4's "simplify the matrix" guidance) — planned as a small dedicated addition rather than bundled here.
 
-### 3. Scheduled Build Tests (`.github/workflows/test-scheduled-functionality.yml`)
+### 3. Release (`.github/workflows/release.yml`)
 
-**Triggers**:
+**Triggers**: Push to `main`, push of a `v*.*.*` tag, manual `workflow_dispatch`, and the twice-monthly schedule (4:30 AM on the 1st and 15th). All four go through the exact same pipeline below — there is no separate, independently-scheduled publish path that can bypass testing.
 
-- Scheduled: 30 minutes before main builds (4:00 AM on 1st and 15th of each month)
-- Manual: `workflow_dispatch` with test level options
+This replaces the previous `build.yml` (which built and pushed unconditionally on push/tag/manual/its own schedule) and `test-scheduled-functionality.yml` (which ran on a second, separate schedule 30 minutes earlier and then called `gh workflow run build.yml` — a call that raced against `build.yml`'s own independent schedule trigger and could not actually block it if tests failed).
 
-**Purpose**: Prevents broken scheduled releases by pre-testing with latest upstream changes
+**Job graph**:
 
-Builds share the same GHCR registry build cache (`<image>:buildcache`) as `pr-ci.yml` and `build.yml`, so a cache warmed by any of the three benefits the others.
+```text
+resolve-upstream-shas
+        |
+build-candidates (reusable, shared with pr-ci.yml)
+        |
+        +--> functional-test
+        +--> security-scan
+                  |
+             release-gate
+                  |
+               promote
+                  |
+          cleanup-candidates
+```
 
-**Test levels**:
-
-- `basic`: Core functionality only
-- `comprehensive`: Full test suite including security scans
-- `smoke`: Quick validation tests
-
-**What it does**:
-
-1. **Builds test images** with latest upstream changes
-2. **Tests critical functionality** (DNS, HTTP, cache)
-3. **Multi-architecture validation** (ARM64 compatibility)
-4. **Security scanning** with Trivy vulnerability scanner
-5. **Release decision**: Blocks or allows the main build based on results
-6. **Automatic cleanup** of test images to save registry space
+1. **`resolve-upstream-shas`**: resolves each of the 6 upstream repos' current `master` commit SHA via `git ls-remote` (no full clone). Recorded in the job summary and uploaded as an `upstream-shas-<run-id>` artifact.
+2. **`build-candidates`**: the same reusable workflow `pr-ci.yml` calls, given the exact resolved SHAs above (not a floating branch), tagged `candidate-<run-id>`. Base-image `FROM` lines are rewritten by `scripts/pin-base-image.sh`, which fails the build if its expected line doesn't appear in the target Dockerfile exactly once, rather than silently doing nothing (or the wrong thing) on a zero- or multi-match.
+3. **`functional-test`**: the identical `tests/cache-integration/run-integration-tests.sh` test PR CI runs, against the candidate digests.
+4. **`security-scan`**: Trivy scan of the exact candidate digests (HIGH/CRITICAL). Advisory only for now, matching the previous behavior — see the known gap below.
+5. **`release-gate`**: fails if `resolve-upstream-shas`, `build-candidates`, or `functional-test` did not succeed. A `security-scan` failure is logged as a warning but does not block.
+6. **`promote`**: only runs if `release-gate` succeeded. Retags the tested candidate digests to `latest` (and to the pushed tag name, for a `v*.*.*` push) using `docker buildx imagetools create` — a registry-side manifest copy, not a rebuild — then verifies each promoted tag resolves back to the exact digest that was tested.
+7. **`cleanup-candidates`**: best-effort deletion of old `candidate-<run-id>` package versions via the GitHub API, keeping the most recent few. Marked `continue-on-error`, since the default `GITHUB_TOKEN` may not have package-delete rights depending on repository/package settings — if deletions consistently fail, that's a repository setting to confirm, not a workflow bug.
 
 **Blocking criteria**:
 
-- ❌ Core functionality failures (DNS, HTTP responses)
-- ❌ Multi-architecture build/runtime failures
-- ⚠️ Security vulnerabilities (warning only, doesn't block)
+- ❌ Failure to resolve upstream SHAs, build candidates, or pass the functional test blocks promotion entirely — no tag changes.
+- ⚠️ Security vulnerabilities are logged as a warning but do not block (tracked as a known gap below).
+
+> **Known gap (tracked for a follow-up PR)**: security scanning is advisory-only. Making it properly blocking needs a reviewed baseline (so pre-existing vulnerabilities in upstream base images don't permanently wedge every release) rather than either ignoring all findings or blocking on existing debt — see the plan's Phase 6.2.
 
 ### 4. Performance Tests (`.github/workflows/performance-tests.yml`)
 
@@ -143,13 +151,12 @@ Builds share the same GHCR registry build cache (`<image>:buildcache`) as `pr-ci
 
 ### For Release Validation
 
-**Scheduled validation**: Runs automatically before scheduled builds.
+**Scheduled validation**: The Release workflow runs automatically on the twice-monthly schedule, and also on every push to `main` or a `v*.*.*` tag.
 
 **Manual validation**:
 
 ```bash
-# Go to Actions tab > Scheduled Build Functionality Tests > Run workflow
-# Choose test level: basic, comprehensive, or smoke
+# Go to Actions tab > Release > Run workflow
 ```
 
 ### For Performance Analysis
@@ -173,11 +180,10 @@ Results are displayed in:
 - ✅ **PR comments** (if configured)
 - ✅ **Check status** that can be made required for merging
 
-### Scheduled Test Results
+### Release Results
 
-- ✅ **Success**: Main build workflow is triggered automatically
-- ❌ **Failure**: Build is blocked, detailed failure report in step summary
-- 📧 **Notifications**: Can be configured to alert on failures
+- ✅ **Success**: `release-gate` passes and `promote` retags `latest` (and the pushed version tag, if any) to the tested candidate digests.
+- ❌ **Failure**: `release-gate` fails and `promote` does not run — no tag changes. Detailed failure report in the job summary.
 
 ### Performance Test Results
 
@@ -301,11 +307,11 @@ docker compose -f test-compose.yml up -d
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   PR Tests      │    │  Scheduled Tests │    │ Performance     │
+│   PR CI         │    │  Release         │    │ Performance     │
 │                 │    │                  │    │ Tests           │
-│ • AMD64 Matrix  │    │ • Pre-build      │    │ • Load Testing  │
+│ • Cache Integ.  │    │ • Resolve SHAs   │    │ • Load Testing  │
 │ • ARM64 Compat  │    │ • Security Scan  │    │ • Benchmarking  │
-│ • 5 Scenarios   │    │ • Release Gate   │    │ • Resource Mon  │
+│ • ci-gate       │    │ • release-gate   │    │ • Resource Mon  │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
          │                       │                       │
          └───────────────────────┼───────────────────────┘

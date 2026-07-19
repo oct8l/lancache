@@ -1,0 +1,290 @@
+name: Build candidate images
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Immutable tag applied to every candidate image for this run"
+        required: true
+        type: string
+      platforms:
+        description: "Comma-separated buildx platform list"
+        required: false
+        type: string
+        default: linux/amd64,linux/arm64/v8,linux/arm/v7
+      push:
+        description: "Push candidates to GHCR. Set false for untrusted (fork) builds that cannot authenticate."
+        required: false
+        type: boolean
+        default: true
+      ubuntu_ref:
+        required: true
+        type: string
+      ubuntu_nginx_ref:
+        required: true
+        type: string
+      monolithic_ref:
+        required: true
+        type: string
+      generic_ref:
+        required: true
+        type: string
+      sniproxy_ref:
+        required: true
+        type: string
+      dns_ref:
+        required: true
+        type: string
+    outputs:
+      ubuntu_digest:
+        value: ${{ jobs.build.outputs.ubuntu_digest }}
+      ubuntu_nginx_digest:
+        value: ${{ jobs.build.outputs.ubuntu_nginx_digest }}
+      monolithic_digest:
+        value: ${{ jobs.build.outputs.monolithic_digest }}
+      generic_digest:
+        value: ${{ jobs.build.outputs.generic_digest }}
+      sniproxy_digest:
+        value: ${{ jobs.build.outputs.sniproxy_digest }}
+      dns_digest:
+        value: ${{ jobs.build.outputs.dns_digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    outputs:
+      ubuntu_digest: ${{ steps.ubuntu.outputs.digest }}
+      ubuntu_nginx_digest: ${{ steps.ubuntu-nginx.outputs.digest }}
+      monolithic_digest: ${{ steps.monolithic.outputs.digest }}
+      generic_digest: ${{ steps.generic.outputs.digest }}
+      sniproxy_digest: ${{ steps.sniproxy.outputs.digest }}
+      dns_digest: ${{ steps.dns.outputs.digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Login to Github Packages
+        if: inputs.push
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push lancachenet/ubuntu
+        id: ubuntu
+        env:
+          REF: ${{ inputs.ubuntu_ref }}
+          PLATFORMS: ${{ inputs.platforms }}
+          DO_PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/ubuntu.git
+          cd ubuntu
+          git checkout "${REF}"
+          push_flag="--push"; load_flag=""
+          if [ "${DO_PUSH}" != "true" ]; then push_flag=""; load_flag="--load"; PLATFORMS="linux/amd64"; fi
+          docker buildx build \
+            --platform "${PLATFORMS}" \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-ubuntu:${{ inputs.image_tag }}" \
+            ${push_flag} ${load_flag} \
+            --metadata-file /tmp/meta-ubuntu.json .
+          if [ "${DO_PUSH}" = "true" ]; then
+            echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-ubuntu.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & Push lancachenet/ubuntu-nginx
+        id: ubuntu-nginx
+        env:
+          REF: ${{ inputs.ubuntu_nginx_ref }}
+          PLATFORMS: ${{ inputs.platforms }}
+          DO_PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/ubuntu-nginx.git
+          cd ubuntu-nginx
+          git checkout "${REF}"
+          if [ "${DO_PUSH}" = "true" ]; then
+            base="${REGISTRY}/lancache-ubuntu@${{ steps.ubuntu.outputs.digest }}"
+          else
+            base="${REGISTRY}/lancache-ubuntu:${{ inputs.image_tag }}"
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/pin-base-image.sh" Dockerfile \
+            "FROM lancachenet/ubuntu:latest" "FROM ${base}"
+          cat Dockerfile
+          push_flag="--push"; load_flag=""
+          if [ "${DO_PUSH}" != "true" ]; then push_flag=""; load_flag="--load"; PLATFORMS="linux/amd64"; fi
+          docker buildx build \
+            --platform "${PLATFORMS}" \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-ubuntu-nginx:${{ inputs.image_tag }}" \
+            ${push_flag} ${load_flag} \
+            --metadata-file /tmp/meta-ubuntu-nginx.json .
+          if [ "${DO_PUSH}" = "true" ]; then
+            echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-ubuntu-nginx.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & Push lancachenet/monolithic
+        id: monolithic
+        env:
+          REF: ${{ inputs.monolithic_ref }}
+          PLATFORMS: ${{ inputs.platforms }}
+          DO_PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/monolithic.git
+          cd monolithic
+          git checkout "${REF}"
+          if [ "${DO_PUSH}" = "true" ]; then
+            base="${REGISTRY}/lancache-ubuntu-nginx@${{ steps.ubuntu-nginx.outputs.digest }}"
+          else
+            base="${REGISTRY}/lancache-ubuntu-nginx:${{ inputs.image_tag }}"
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/pin-base-image.sh" Dockerfile \
+            "FROM lancachenet/ubuntu-nginx:latest" "FROM ${base}"
+          cat Dockerfile
+          cp "${GITHUB_WORKSPACE}/20_cache.conf" overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
+          push_flag="--push"; load_flag=""
+          if [ "${DO_PUSH}" != "true" ]; then push_flag=""; load_flag="--load"; PLATFORMS="linux/amd64"; fi
+          docker buildx build \
+            --platform "${PLATFORMS}" \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-monolithic:${{ inputs.image_tag }}" \
+            ${push_flag} ${load_flag} \
+            --metadata-file /tmp/meta-monolithic.json .
+          if [ "${DO_PUSH}" = "true" ]; then
+            echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-monolithic.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & Push lancachenet/generic
+        id: generic
+        env:
+          REF: ${{ inputs.generic_ref }}
+          PLATFORMS: ${{ inputs.platforms }}
+          DO_PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/generic.git
+          cd generic
+          git checkout "${REF}"
+          if [ "${DO_PUSH}" = "true" ]; then
+            base="${REGISTRY}/lancache-monolithic@${{ steps.monolithic.outputs.digest }}"
+          else
+            base="${REGISTRY}/lancache-monolithic:${{ inputs.image_tag }}"
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/pin-base-image.sh" Dockerfile \
+            "FROM lancachenet/monolithic:latest" "FROM ${base}"
+          cat Dockerfile
+          push_flag="--push"; load_flag=""
+          if [ "${DO_PUSH}" != "true" ]; then push_flag=""; load_flag="--load"; PLATFORMS="linux/amd64"; fi
+          docker buildx build \
+            --platform "${PLATFORMS}" \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-generic:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-generic:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-generic:${{ inputs.image_tag }}" \
+            ${push_flag} ${load_flag} \
+            --metadata-file /tmp/meta-generic.json .
+          if [ "${DO_PUSH}" = "true" ]; then
+            echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-generic.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & Push lancachenet/sniproxy
+        id: sniproxy
+        env:
+          REF: ${{ inputs.sniproxy_ref }}
+          PLATFORMS: ${{ inputs.platforms }}
+          DO_PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/sniproxy.git
+          cd sniproxy
+          git checkout "${REF}"
+          push_flag="--push"; load_flag=""
+          if [ "${DO_PUSH}" != "true" ]; then push_flag=""; load_flag="--load"; PLATFORMS="linux/amd64"; fi
+          docker buildx build \
+            --platform "${PLATFORMS}" \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-sniproxy:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-sniproxy:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-sniproxy:${{ inputs.image_tag }}" \
+            ${push_flag} ${load_flag} \
+            --metadata-file /tmp/meta-sniproxy.json .
+          if [ "${DO_PUSH}" = "true" ]; then
+            echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-sniproxy.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & Push lancachenet/lancache-dns
+        id: dns
+        env:
+          REF: ${{ inputs.dns_ref }}
+          PLATFORMS: ${{ inputs.platforms }}
+          DO_PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/lancache-dns.git
+          cd lancache-dns
+          git checkout "${REF}"
+          if [ "${DO_PUSH}" = "true" ]; then
+            base="${REGISTRY}/lancache-ubuntu@${{ steps.ubuntu.outputs.digest }}"
+          else
+            base="${REGISTRY}/lancache-ubuntu:${{ inputs.image_tag }}"
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/pin-base-image.sh" Dockerfile \
+            "FROM lancachenet/ubuntu:latest" "FROM ${base}"
+          cat Dockerfile
+          push_flag="--push"; load_flag=""
+          if [ "${DO_PUSH}" != "true" ]; then push_flag=""; load_flag="--load"; PLATFORMS="linux/amd64"; fi
+          docker buildx build \
+            --platform "${PLATFORMS}" \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-dns:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-dns:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-dns:${{ inputs.image_tag }}" \
+            ${push_flag} ${load_flag} \
+            --metadata-file /tmp/meta-dns.json .
+          if [ "${DO_PUSH}" = "true" ]; then
+            echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-dns.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Record candidate build summary
+        run: |
+          {
+            echo "## Candidate images (tag: \`${{ inputs.image_tag }}\`)"
+            echo ""
+            echo "| Image | Upstream ref | Digest |"
+            echo "| --- | --- | --- |"
+            echo "| lancache-ubuntu | ${{ inputs.ubuntu_ref }} | \`${{ steps.ubuntu.outputs.digest }}\` |"
+            echo "| lancache-ubuntu-nginx | ${{ inputs.ubuntu_nginx_ref }} | \`${{ steps.ubuntu-nginx.outputs.digest }}\` |"
+            echo "| lancache-monolithic | ${{ inputs.monolithic_ref }} | \`${{ steps.monolithic.outputs.digest }}\` |"
+            echo "| lancache-generic | ${{ inputs.generic_ref }} | \`${{ steps.generic.outputs.digest }}\` |"
+            echo "| lancache-sniproxy | ${{ inputs.sniproxy_ref }} | \`${{ steps.sniproxy.outputs.digest }}\` |"
+            echo "| lancache-dns | ${{ inputs.dns_ref }} | \`${{ steps.dns.outputs.digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

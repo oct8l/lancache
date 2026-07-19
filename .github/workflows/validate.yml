@@ -50,7 +50,7 @@ jobs:
 
       - name: ShellCheck extracted test scripts
         run: |
-          mapfile -d '' -t scripts < <(find tests -type f -name '*.sh' -print0)
+          mapfile -d '' -t scripts < <(find tests scripts -type f -name '*.sh' -print0)
           if [ "${#scripts[@]}" -gt 0 ]; then
             docker run --rm -v "${{ github.workspace }}:/repo" -w /repo --entrypoint shellcheck \
               "${ACTIONLINT_IMAGE}" "${scripts[@]}"
