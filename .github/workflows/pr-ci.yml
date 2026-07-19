@@ -338,6 +338,41 @@ jobs:
           docker rm -f generic-test || true
           rm -rf test-cache test.env || true
 
+  # "Startup/TLS path" row of the architecture matrix in TESTING.md for
+  # lancache-sniproxy, which has had no dedicated runtime test until now.
+  component-sniproxy:
+    needs: build-candidates
+    if: success() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      SNIPROXY_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-sniproxy@${{ needs.build-candidates.outputs.sniproxy_digest }}
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Start sniproxy TLS fixture
+        working-directory: tests/sniproxy
+        run: docker compose up -d --build
+
+      - name: Run sniproxy TLS pass-through test
+        working-directory: tests/sniproxy
+        run: bash run-sniproxy-test.sh
+
+      - name: Collect diagnostics
+        if: failure()
+        working-directory: tests/sniproxy
+        run: |
+          docker compose ps
+          docker compose logs
+
+      - name: Cleanup
+        if: always()
+        working-directory: tests/sniproxy
+        run: docker compose down -v || true
+
   # Exercises actions/upload-artifact and actions/download-artifact directly so a
   # Renovate PR bumping either action runs the exact dependency it changes.
   artifact-contracts:
@@ -509,6 +544,7 @@ jobs:
       - functional-amd64
       - functional-arm64
       - component-generic
+      - component-sniproxy
       - artifact-contracts
       - fork-build-test
     if: always()
@@ -525,11 +561,12 @@ jobs:
           AMD64_RESULT: ${{ needs.functional-amd64.result }}
           ARM64_RESULT: ${{ needs.functional-arm64.result }}
           GENERIC_RESULT: ${{ needs.component-generic.result }}
+          SNIPROXY_RESULT: ${{ needs.component-sniproxy.result }}
           ARTIFACT_RESULT: ${{ needs.artifact-contracts.result }}
           FORK_RESULT: ${{ needs.fork-build-test.result }}
         run: |
           set -euo pipefail
-          echo "is_fork=$IS_FORK validate=$VALIDATE_RESULT build=$BUILD_RESULT amd64=$AMD64_RESULT arm64=$ARM64_RESULT generic=$GENERIC_RESULT artifact=$ARTIFACT_RESULT fork=$FORK_RESULT"
+          echo "is_fork=$IS_FORK validate=$VALIDATE_RESULT build=$BUILD_RESULT amd64=$AMD64_RESULT arm64=$ARM64_RESULT generic=$GENERIC_RESULT sniproxy=$SNIPROXY_RESULT artifact=$ARTIFACT_RESULT fork=$FORK_RESULT"
 
           if [ "$VALIDATE_RESULT" != "success" ]; then
             echo "::error::validate did not succeed ($VALIDATE_RESULT)"
@@ -543,7 +580,7 @@ jobs:
             fi
           else
             failed=0
-            for pair in "build-candidates:$BUILD_RESULT" "functional-amd64:$AMD64_RESULT" "functional-arm64:$ARM64_RESULT" "component-generic:$GENERIC_RESULT" "artifact-contracts:$ARTIFACT_RESULT"; do
+            for pair in "build-candidates:$BUILD_RESULT" "functional-amd64:$AMD64_RESULT" "functional-arm64:$ARM64_RESULT" "component-generic:$GENERIC_RESULT" "component-sniproxy:$SNIPROXY_RESULT" "artifact-contracts:$ARTIFACT_RESULT"; do
               name="${pair%%:*}"
               result="${pair##*:}"
               if [ "$result" != "success" ]; then
