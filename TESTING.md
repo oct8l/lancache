@@ -122,17 +122,14 @@ build-candidates (reusable, shared with pr-ci.yml)
 1. **`resolve-upstream-shas`**: resolves each of the 6 upstream repos' current `master` commit SHA via `git ls-remote` (no full clone). Recorded in the job summary and uploaded as an `upstream-shas-<run-id>` artifact.
 2. **`build-candidates`**: the same reusable workflow `pr-ci.yml` calls, given the exact resolved SHAs above (not a floating branch), tagged `candidate-<run-id>`. Base-image `FROM` lines are rewritten by `scripts/pin-base-image.sh`, which fails the build if its expected line doesn't appear in the target Dockerfile exactly once, rather than silently doing nothing (or the wrong thing) on a zero- or multi-match.
 3. **`functional-test`**: the identical `tests/cache-integration/run-integration-tests.sh` test PR CI runs, against the candidate digests.
-4. **`security-scan`**: Trivy scan of the exact candidate digests (HIGH/CRITICAL). Advisory only for now, matching the previous behavior — see the known gap below.
-5. **`release-gate`**: fails if `resolve-upstream-shas`, `build-candidates`, or `functional-test` did not succeed. A `security-scan` failure is logged as a warning but does not block.
+4. **`security-scan`**: `aquasecurity/trivy-action` scans each exact candidate digest (HIGH/CRITICAL, `os,library`), one image per step so a failure in one doesn't stop the others from being scanned. `ignore-unfixed: true` means only vulnerabilities with an available fix can block — this is what makes blocking safe: there's no way for pre-existing, unpatched debt to permanently wedge every release, since anything without a fix is simply not counted. Each image's SARIF results are uploaded to the repository's Security tab (`github/codeql-action/upload-sarif`, one category per image) regardless of outcome, so findings are visible between releases too, not just in the Actions log. This mirrors the pattern already proven in `oct8l/apt-cacher-ng`, including its exact `trivy-action`/`codeql-action` pins.
+5. **`release-gate`**: fails if `resolve-upstream-shas`, `build-candidates`, `functional-test`, or `security-scan` did not succeed.
 6. **`promote`**: only runs if `release-gate` succeeded. Retags the tested candidate digests to `latest` (and to the pushed tag name, for a `v*.*.*` push) using `docker buildx imagetools create` — a registry-side manifest copy, not a rebuild — then verifies each promoted tag resolves back to the exact digest that was tested.
 7. **`cleanup-candidates`**: best-effort deletion of old `candidate-<run-id>` package versions via the GitHub API, keeping the most recent few. Never deletes a version that also carries `latest` or a `vX.Y.Z` tag — `promote` retags by digest rather than rebuilding, so a just-promoted candidate version and the live release tag can be the same underlying version object (GHCR merges tags pointing at one digest). Marked `continue-on-error`, since the default `GITHUB_TOKEN` may not have package-delete rights depending on repository/package settings — if deletions consistently fail, that's a repository setting to confirm, not a workflow bug.
 
 **Blocking criteria**:
 
-- ❌ Failure to resolve upstream SHAs, build candidates, or pass the functional test blocks promotion entirely — no tag changes.
-- ⚠️ Security vulnerabilities are logged as a warning but do not block (tracked as a known gap below).
-
-> **Known gap (tracked for a follow-up PR)**: security scanning is advisory-only. Making it properly blocking needs a reviewed baseline (so pre-existing vulnerabilities in upstream base images don't permanently wedge every release) rather than either ignoring all findings or blocking on existing debt — see the plan's Phase 6.2.
+- ❌ Failure to resolve upstream SHAs, build candidates, pass the functional test, or pass the security scan blocks promotion entirely — no tag changes.
 
 ### 4. Performance Tests (`.github/workflows/performance-tests.yml`)
 

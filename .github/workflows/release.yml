@@ -149,51 +149,177 @@ jobs:
         working-directory: tests/cache-integration
         run: docker compose down -v || true
 
-  # Advisory for now (matches the previous behavior in
-  # test-scheduled-functionality.yml): findings are recorded but do not block
-  # release-gate. Making this properly blocking needs a reviewed baseline so
-  # existing debt doesn't permanently wedge releases; that's tracked as a
-  # follow-up (see TESTING.md) rather than done here.
+  # Blocking: fails release-gate on any HIGH/CRITICAL finding that has a
+  # fix available (ignore-unfixed avoids permanently wedging releases on
+  # vulnerabilities nobody has patched yet). SARIF results are uploaded to
+  # the repo's Security tab per image. Mirrors the pattern already proven in
+  # oct8l/apt-cacher-ng, including its trivy-action/codeql-action pins.
   security-scan:
     needs: build-candidates
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+      security-events: write
     steps:
-      - name: Install Trivy
-        run: |
-          set -euo pipefail
-          trivy_version_num="${TRIVY_VERSION#v}"
-          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${trivy_version_num}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
-          tar -xzf /tmp/trivy.tgz -C /tmp trivy
-          install -m 0755 /tmp/trivy /usr/local/bin/trivy
-          trivy --version
+      - name: Scan lancache-ubuntu
+        id: scan-ubuntu
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@c07df6fec6fa692e6fd1200d50aaa1fdd66f03c8 # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/lancache-ubuntu@${{ needs.build-candidates.outputs.ubuntu_digest }}
+          version: ${{ env.TRIVY_VERSION }}
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'results-ubuntu.sarif'
 
-      - name: Scan candidate images for HIGH/CRITICAL vulnerabilities
+      - name: Upload lancache-ubuntu SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: results-ubuntu.sarif
+          category: lancache-ubuntu
+
+      - name: Scan lancache-ubuntu-nginx
+        id: scan-ubuntu-nginx
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@c07df6fec6fa692e6fd1200d50aaa1fdd66f03c8 # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/lancache-ubuntu-nginx@${{ needs.build-candidates.outputs.ubuntu_nginx_digest }}
+          version: ${{ env.TRIVY_VERSION }}
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'results-ubuntu-nginx.sarif'
+
+      - name: Upload lancache-ubuntu-nginx SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: results-ubuntu-nginx.sarif
+          category: lancache-ubuntu-nginx
+
+      - name: Scan lancache-monolithic
+        id: scan-monolithic
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@c07df6fec6fa692e6fd1200d50aaa1fdd66f03c8 # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
+          version: ${{ env.TRIVY_VERSION }}
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'results-monolithic.sarif'
+
+      - name: Upload lancache-monolithic SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: results-monolithic.sarif
+          category: lancache-monolithic
+
+      - name: Scan lancache-generic
+        id: scan-generic
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@c07df6fec6fa692e6fd1200d50aaa1fdd66f03c8 # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/lancache-generic@${{ needs.build-candidates.outputs.generic_digest }}
+          version: ${{ env.TRIVY_VERSION }}
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'results-generic.sarif'
+
+      - name: Upload lancache-generic SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: results-generic.sarif
+          category: lancache-generic
+
+      - name: Scan lancache-sniproxy
+        id: scan-sniproxy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@c07df6fec6fa692e6fd1200d50aaa1fdd66f03c8 # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/lancache-sniproxy@${{ needs.build-candidates.outputs.sniproxy_digest }}
+          version: ${{ env.TRIVY_VERSION }}
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'results-sniproxy.sarif'
+
+      - name: Upload lancache-sniproxy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: results-sniproxy.sarif
+          category: lancache-sniproxy
+
+      - name: Scan lancache-dns
+        id: scan-dns
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@c07df6fec6fa692e6fd1200d50aaa1fdd66f03c8 # master
+        with:
+          image-ref: ${{ env.REGISTRY }}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}
+          version: ${{ env.TRIVY_VERSION }}
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'results-dns.sarif'
+
+      - name: Upload lancache-dns SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: results-dns.sarif
+          category: lancache-dns
+
+      - name: Fail if any image had blocking findings
+        if: always()
+        env:
+          UBUNTU_OUTCOME: ${{ steps.scan-ubuntu.outcome }}
+          UBUNTU_NGINX_OUTCOME: ${{ steps.scan-ubuntu-nginx.outcome }}
+          MONOLITHIC_OUTCOME: ${{ steps.scan-monolithic.outcome }}
+          GENERIC_OUTCOME: ${{ steps.scan-generic.outcome }}
+          SNIPROXY_OUTCOME: ${{ steps.scan-sniproxy.outcome }}
+          DNS_OUTCOME: ${{ steps.scan-dns.outcome }}
         run: |
           set -euo pipefail
-          images=(
-            "${REGISTRY}/lancache-ubuntu@${{ needs.build-candidates.outputs.ubuntu_digest }}"
-            "${REGISTRY}/lancache-ubuntu-nginx@${{ needs.build-candidates.outputs.ubuntu_nginx_digest }}"
-            "${REGISTRY}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}"
-            "${REGISTRY}/lancache-generic@${{ needs.build-candidates.outputs.generic_digest }}"
-            "${REGISTRY}/lancache-sniproxy@${{ needs.build-candidates.outputs.sniproxy_digest }}"
-            "${REGISTRY}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}"
-          )
           failed=0
-          for image in "${images[@]}"; do
-            echo "Scanning ${image}"
-            if ! trivy image --exit-code 1 --severity HIGH,CRITICAL --quiet "${image}"; then
-              echo "::warning::HIGH/CRITICAL vulnerabilities found in ${image}"
+          for pair in \
+            "lancache-ubuntu:${UBUNTU_OUTCOME}" \
+            "lancache-ubuntu-nginx:${UBUNTU_NGINX_OUTCOME}" \
+            "lancache-monolithic:${MONOLITHIC_OUTCOME}" \
+            "lancache-generic:${GENERIC_OUTCOME}" \
+            "lancache-sniproxy:${SNIPROXY_OUTCOME}" \
+            "lancache-dns:${DNS_OUTCOME}"
+          do
+            name="${pair%%:*}"
+            outcome="${pair##*:}"
+            echo "${name}: ${outcome}"
+            if [ "${outcome}" != "success" ]; then
+              echo "::error::${name} has HIGH/CRITICAL vulnerabilities with an available fix"
               failed=1
             fi
           done
           if [ "${failed}" -ne 0 ]; then
-            echo "security_result=failure" >> "$GITHUB_OUTPUT"
-          else
-            echo "security_result=success" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
+          echo "All candidate images passed the security scan"
 
   release-gate:
     name: release-gate
@@ -221,12 +347,8 @@ jobs:
           set -euo pipefail
           echo "resolve=${RESOLVE_RESULT} build=${BUILD_RESULT} test=${TEST_RESULT} security=${SECURITY_RESULT}"
 
-          if [ "${SECURITY_RESULT}" = "failure" ]; then
-            echo "::warning::security-scan reported findings; not blocking release (see TESTING.md)"
-          fi
-
           failed=0
-          for pair in "resolve-upstream-shas:${RESOLVE_RESULT}" "build-candidates:${BUILD_RESULT}" "functional-test:${TEST_RESULT}"; do
+          for pair in "resolve-upstream-shas:${RESOLVE_RESULT}" "build-candidates:${BUILD_RESULT}" "functional-test:${TEST_RESULT}" "security-scan:${SECURITY_RESULT}"; do
             name="${pair%%:*}"
             result="${pair##*:}"
             if [ "${result}" != "success" ]; then
