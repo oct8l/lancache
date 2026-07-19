@@ -1,0 +1,670 @@
+name: PR CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  # Immutable per-revision tag: a PR pushing new commits gets a new tag rather
+  # than overwriting the previous revision's images.
+  IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+jobs:
+  validate:
+    uses: ./.github/workflows/validate.yml
+    permissions:
+      contents: read
+    with:
+      base_sha: ${{ github.event.pull_request.base.sha }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+
+  # Same-repository PRs (including Renovate) are built and pushed to GHCR so
+  # downstream jobs can pull the exact tested candidate by digest. Fork PRs
+  # never get GHCR credentials; see fork-build-test below.
+  build-candidates:
+    needs: validate
+    if: success() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ubuntu_digest: ${{ steps.ubuntu.outputs.digest }}
+      ubuntu_nginx_digest: ${{ steps.ubuntu-nginx.outputs.digest }}
+      monolithic_digest: ${{ steps.monolithic.outputs.digest }}
+      generic_digest: ${{ steps.generic.outputs.digest }}
+      sniproxy_digest: ${{ steps.sniproxy.outputs.digest }}
+      dns_digest: ${{ steps.dns.outputs.digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Login to Github Packages
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push lancachenet/ubuntu
+        id: ubuntu
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/ubuntu.git
+          cd ubuntu
+          docker buildx build \
+            --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-ubuntu:${IMAGE_TAG}" \
+            --push \
+            --metadata-file /tmp/meta-ubuntu.json .
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-ubuntu.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push lancachenet/ubuntu-nginx
+        id: ubuntu-nginx
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/ubuntu-nginx.git
+          cd ubuntu-nginx
+          line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${REGISTRY}/lancache-ubuntu@${{ steps.ubuntu.outputs.digest }}" Dockerfile
+          cat Dockerfile
+          docker buildx build \
+            --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-ubuntu-nginx:${IMAGE_TAG}" \
+            --push \
+            --metadata-file /tmp/meta-ubuntu-nginx.json .
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-ubuntu-nginx.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push lancachenet/monolithic
+        id: monolithic
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/monolithic.git
+          cd monolithic
+          line_number=$(grep -n "FROM lancachenet/ubuntu-nginx:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${REGISTRY}/lancache-ubuntu-nginx@${{ steps.ubuntu-nginx.outputs.digest }}" Dockerfile
+          cat Dockerfile
+          cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
+          docker buildx build \
+            --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-monolithic:${IMAGE_TAG}" \
+            --push \
+            --metadata-file /tmp/meta-monolithic.json .
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-monolithic.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push lancachenet/generic
+        id: generic
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/generic.git
+          cd generic
+          line_number=$(grep -n "FROM lancachenet/monolithic:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${REGISTRY}/lancache-monolithic@${{ steps.monolithic.outputs.digest }}" Dockerfile
+          cat Dockerfile
+          docker buildx build \
+            --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-generic:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-generic:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-generic:${IMAGE_TAG}" \
+            --push \
+            --metadata-file /tmp/meta-generic.json .
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-generic.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push lancachenet/sniproxy
+        id: sniproxy
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/sniproxy.git
+          cd sniproxy
+          docker buildx build \
+            --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-sniproxy:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-sniproxy:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-sniproxy:${IMAGE_TAG}" \
+            --push \
+            --metadata-file /tmp/meta-sniproxy.json .
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-sniproxy.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push lancachenet/lancache-dns
+        id: dns
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/lancache-dns.git
+          cd lancache-dns
+          line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM ${REGISTRY}/lancache-ubuntu@${{ steps.ubuntu.outputs.digest }}" Dockerfile
+          cat Dockerfile
+          docker buildx build \
+            --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-dns:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-dns:buildcache,mode=max" \
+            -t "${REGISTRY}/lancache-dns:${IMAGE_TAG}" \
+            --push \
+            --metadata-file /tmp/meta-dns.json .
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-dns.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Record candidate digests
+        run: |
+          {
+            echo "## Candidate images for PR #${{ github.event.pull_request.number }} (${{ github.event.pull_request.head.sha }})"
+            echo ""
+            echo "| Image | Tag | Digest |"
+            echo "| --- | --- | --- |"
+            echo "| lancache-ubuntu | \`${IMAGE_TAG}\` | \`${{ steps.ubuntu.outputs.digest }}\` |"
+            echo "| lancache-ubuntu-nginx | \`${IMAGE_TAG}\` | \`${{ steps.ubuntu-nginx.outputs.digest }}\` |"
+            echo "| lancache-monolithic | \`${IMAGE_TAG}\` | \`${{ steps.monolithic.outputs.digest }}\` |"
+            echo "| lancache-generic | \`${IMAGE_TAG}\` | \`${{ steps.generic.outputs.digest }}\` |"
+            echo "| lancache-sniproxy | \`${IMAGE_TAG}\` | \`${{ steps.sniproxy.outputs.digest }}\` |"
+            echo "| lancache-dns | \`${IMAGE_TAG}\` | \`${{ steps.dns.outputs.digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  functional-amd64:
+    needs: build-candidates
+    if: success() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        test-scenario:
+          - steam
+          - epic-games
+          - origin
+          - battle-net
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up test environment
+        run: |
+          mkdir -p test-cache/cache test-cache/logs
+          chmod 777 test-cache/cache test-cache/logs
+
+          cat > test.env << EOF
+          LANCACHE_IP=10.0.0.100
+          CACHE_ROOT=$PWD/test-cache
+          CACHE_MAX_AGE=3650d
+          USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          ENABLE_DNSSEC_VALIDATION=false
+          EOF
+
+      - name: Start LanCache containers
+        env:
+          DNS_IMAGE: ${{ env.REGISTRY }}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}
+          MONOLITHIC_IMAGE: ${{ env.REGISTRY }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
+        run: |
+          cat > test-compose.yml << EOF
+          services:
+            dns:
+              image: ${DNS_IMAGE}
+              env_file: test.env
+              ports:
+                - "127.0.0.1:5353:53/udp"
+                - "127.0.0.1:5353:53/tcp"
+              restart: unless-stopped
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.100
+              healthcheck:
+                test: ["CMD", "nslookup", "localhost", "localhost"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 45s
+
+            monolithic:
+              image: ${MONOLITHIC_IMAGE}
+              env_file: test.env
+              ports:
+                - "127.0.0.1:8080:80/tcp"
+                - "127.0.0.1:8443:443/tcp"
+              restart: unless-stopped
+              volumes:
+                - ./test-cache/cache:/data/cache
+                - ./test-cache/logs:/data/logs
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.101
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://10.0.0.101/lancache-heartbeat"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 60s
+
+          networks:
+            lancache_test:
+              driver: bridge
+              ipam:
+                config:
+                  - subnet: 10.0.0.0/24
+          EOF
+
+          docker compose -f test-compose.yml up -d
+
+          echo "Waiting for containers to start..."
+          sleep 60
+
+          echo "=== Container Status ==="
+          docker compose -f test-compose.yml ps
+
+          echo "=== DNS Container Logs ==="
+          docker compose -f test-compose.yml logs dns
+
+          echo "=== DNS Configuration Check ==="
+          docker compose -f test-compose.yml exec -T dns ls -la /opt/cache-domains/ || echo "Cache domains directory not found"
+          docker compose -f test-compose.yml exec -T dns cat /etc/bind/cache.conf || echo "Bind cache config not found"
+          docker compose -f test-compose.yml exec -T dns head -20 /etc/bind/cache/rpz.db || echo "RPZ config not found"
+
+          echo "Waiting for containers to be healthy..."
+          timeout 300 bash -c 'until docker compose -f test-compose.yml ps | grep -q "healthy"; do sleep 10; echo "Still waiting..."; done' || {
+            echo "Containers failed to become healthy after 5 minutes"
+            docker compose -f test-compose.yml ps
+            docker compose -f test-compose.yml logs
+            exit 1
+          }
+
+      - name: Test DNS resolution
+        run: |
+          echo "Testing DNS resolution for CDN domains..."
+
+          test_domains=(
+            "lancache.steamcontent.com"
+            "download.epicgames.com"
+            "origin-a.akamaihd.net"
+            "blzddist1-a.akamaihd.net"
+            "uplaypc-s-ubisoft.cdn.ubi.com"
+          )
+
+          for domain in "${test_domains[@]}"; do
+            echo "Testing $domain..."
+            result=$(docker compose -f test-compose.yml exec -T dns nslookup "$domain" 127.0.0.1 2>/dev/null | grep "^Address:" | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "$result" != "10.0.0.100" ]; then
+              echo "❌ DNS test failed for $domain - got '$result', expected '10.0.0.100'"
+              docker compose -f test-compose.yml exec -T dns nslookup "$domain" 127.0.0.1
+              exit 1
+            else
+              echo "✅ DNS resolution working for $domain"
+            fi
+          done
+
+      - name: Test cache functionality
+        run: |
+          echo "Testing cache functionality for ${{ matrix.test-scenario }}..."
+
+          case "${{ matrix.test-scenario }}" in
+            "steam")
+              host_header="steamcontent.com"
+              ;;
+            "epic-games")
+              host_header="download.epicgames.com"
+              ;;
+            "origin")
+              host_header="origin-a.akamaihd.net"
+              ;;
+            "battle-net")
+              host_header="blzddist1-a.akamaihd.net"
+              ;;
+          esac
+
+          echo "Testing cache with Host: $host_header"
+          response=$(curl -H "Host: $host_header" -s -w "%{http_code}" -o /dev/null http://127.0.0.1:8080/lancache-heartbeat)
+
+          if [ "$response" = "200" ] || [ "$response" = "204" ]; then
+            echo "✅ Cache is accessible and responding for ${{ matrix.test-scenario }} (HTTP $response)"
+          else
+            echo "❌ Cache test failed for ${{ matrix.test-scenario }} - HTTP $response"
+            docker compose -f test-compose.yml logs monolithic | tail -20
+            exit 1
+          fi
+
+      - name: Check container health and logs
+        run: |
+          echo "=== Container Status ==="
+          docker compose -f test-compose.yml ps
+
+          echo "=== DNS Container Logs ==="
+          docker compose -f test-compose.yml logs dns | tail -50
+
+          echo "=== Monolithic Container Logs ==="
+          docker compose -f test-compose.yml logs monolithic | tail -50
+
+          if docker compose -f test-compose.yml logs | grep -i "fatal\|critical" | grep -v -E "(error_log|error_page|proxy_intercept_errors|configuration)"; then
+            echo "❌ Critical errors found in logs"
+            exit 1
+          else
+            echo "✅ No critical errors in container logs"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f test-compose.yml down -v || true
+          rm -rf test-cache test.env test-compose.yml test-content.txt || true
+
+  functional-arm64:
+    needs: build-candidates
+    if: success() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Test ARM64 image compatibility
+        env:
+          DNS_IMAGE: ${{ env.REGISTRY }}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}
+          MONOLITHIC_IMAGE: ${{ env.REGISTRY }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
+        run: |
+          echo "Testing ARM64 images can be pulled and started..."
+
+          mkdir -p test-cache/cache test-cache/logs
+          chmod 777 test-cache/cache test-cache/logs
+
+          cat > test.env << EOF
+          LANCACHE_IP=10.0.0.100
+          CACHE_ROOT=$PWD/test-cache
+          CACHE_MAX_AGE=3650d
+          USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          ENABLE_DNSSEC_VALIDATION=false
+          EOF
+
+          cat > test-compose-arm64.yml << EOF
+          services:
+            dns:
+              image: ${DNS_IMAGE}
+              platform: linux/arm64
+              env_file: test.env
+              ports:
+                - "127.0.0.1:5353:53/udp"
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.100
+
+            monolithic:
+              image: ${MONOLITHIC_IMAGE}
+              platform: linux/arm64
+              env_file: test.env
+              ports:
+                - "127.0.0.1:8080:80/tcp"
+              volumes:
+                - ./test-cache/cache:/data/cache
+                - ./test-cache/logs:/data/logs
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.101
+
+          networks:
+            lancache_test:
+              driver: bridge
+              ipam:
+                config:
+                  - subnet: 10.0.0.0/24
+          EOF
+
+          echo "Testing ARM64 image pull..."
+          docker compose -f test-compose-arm64.yml pull
+
+          echo "Testing ARM64 containers start..."
+          timeout 180 docker compose -f test-compose-arm64.yml up -d
+
+          sleep 30
+
+          echo "Checking ARM64 container status..."
+          docker compose -f test-compose-arm64.yml ps
+
+          echo "✅ ARM64 images are compatible"
+
+          docker compose -f test-compose-arm64.yml down -v || true
+          rm -rf test-cache test.env test-compose-arm64.yml || true
+
+  # Exercises actions/upload-artifact and actions/download-artifact directly so a
+  # Renovate PR bumping either action runs the exact dependency it changes.
+  artifact-contracts:
+    needs: build-candidates
+    if: success() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Create known artifact content
+        run: |
+          mkdir -p artifact-contract
+          echo "lancache-ci-artifact-contract-check-${{ github.run_id }}" > artifact-contract/marker.txt
+          (cd artifact-contract && sha256sum marker.txt > marker.sha256)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifact-contract-check-${{ github.run_id }}
+          path: artifact-contract/
+          retention-days: 1
+
+      - name: Download artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: artifact-contract-check-${{ github.run_id }}
+          path: downloaded-artifact-contract/
+
+      - name: Verify downloaded artifact matches what was uploaded
+        run: |
+          set -euo pipefail
+          diff artifact-contract/marker.txt downloaded-artifact-contract/marker.txt
+          (cd downloaded-artifact-contract && sha256sum -c marker.sha256)
+          echo "✅ actions/upload-artifact and actions/download-artifact round-trip verified"
+
+  # External fork PRs never receive GHCR push credentials (GitHub forces a
+  # read-only GITHUB_TOKEN for fork pull_request runs regardless of the
+  # `permissions:` declared here). Give them a local, single-arch build/test
+  # instead of the registry-backed pipeline above.
+  fork-build-test:
+    needs: validate
+    if: success() && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build lancachenet/ubuntu (amd64 only, no push)
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/ubuntu.git
+          cd ubuntu
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache" \
+            -t lancache-ubuntu:fork-local --load .
+
+      - name: Build lancachenet/ubuntu-nginx (amd64 only, no push)
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/ubuntu-nginx.git
+          cd ubuntu-nginx
+          line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM lancache-ubuntu:fork-local" Dockerfile
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache" \
+            -t lancache-ubuntu-nginx:fork-local --load .
+
+      - name: Build lancachenet/monolithic (amd64 only, no push)
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/monolithic.git
+          cd monolithic
+          line_number=$(grep -n "FROM lancachenet/ubuntu-nginx:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM lancache-ubuntu-nginx:fork-local" Dockerfile
+          cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache" \
+            -t lancache-monolithic:fork-local --load .
+
+      - name: Build lancachenet/lancache-dns (amd64 only, no push)
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lancachenet/lancache-dns.git
+          cd lancache-dns
+          line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
+          sed -i "${line_number}cFROM lancache-ubuntu:fork-local" Dockerfile
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-dns:buildcache" \
+            -t lancache-dns:fork-local --load .
+
+      - name: Smoke test locally built images
+        run: |
+          set -euo pipefail
+          mkdir -p test-cache/cache test-cache/logs
+          chmod 777 test-cache/cache test-cache/logs
+
+          cat > test.env << EOF
+          LANCACHE_IP=10.0.0.100
+          CACHE_ROOT=$PWD/test-cache
+          CACHE_MAX_AGE=3650d
+          USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          ENABLE_DNSSEC_VALIDATION=false
+          EOF
+
+          cat > test-compose-fork.yml << 'EOF'
+          services:
+            dns:
+              image: lancache-dns:fork-local
+              env_file: test.env
+              ports:
+                - "127.0.0.1:5353:53/udp"
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.100
+
+            monolithic:
+              image: lancache-monolithic:fork-local
+              env_file: test.env
+              ports:
+                - "127.0.0.1:8080:80/tcp"
+              volumes:
+                - ./test-cache/cache:/data/cache
+                - ./test-cache/logs:/data/logs
+              networks:
+                lancache_test:
+                  ipv4_address: 10.0.0.101
+
+          networks:
+            lancache_test:
+              driver: bridge
+              ipam:
+                config:
+                  - subnet: 10.0.0.0/24
+          EOF
+
+          docker compose -f test-compose-fork.yml up -d
+          sleep 30
+
+          docker compose -f test-compose-fork.yml ps
+
+          response=$(curl -s -w "%{http_code}" -o /dev/null http://127.0.0.1:8080/lancache-heartbeat)
+          if [ "$response" != "200" ] && [ "$response" != "204" ]; then
+            echo "❌ Fork build smoke test failed - HTTP $response"
+            docker compose -f test-compose-fork.yml logs
+            exit 1
+          fi
+          echo "✅ Fork-local build smoke test passed (HTTP $response)"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f test-compose-fork.yml down -v || true
+          rm -rf test-cache test.env test-compose-fork.yml || true
+
+  ci-gate:
+    name: ci-gate
+    needs:
+      - validate
+      - build-candidates
+      - functional-amd64
+      - functional-arm64
+      - artifact-contracts
+      - fork-build-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Evaluate required results
+        env:
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          BUILD_RESULT: ${{ needs.build-candidates.result }}
+          AMD64_RESULT: ${{ needs.functional-amd64.result }}
+          ARM64_RESULT: ${{ needs.functional-arm64.result }}
+          ARTIFACT_RESULT: ${{ needs.artifact-contracts.result }}
+          FORK_RESULT: ${{ needs.fork-build-test.result }}
+        run: |
+          set -euo pipefail
+          echo "is_fork=$IS_FORK validate=$VALIDATE_RESULT build=$BUILD_RESULT amd64=$AMD64_RESULT arm64=$ARM64_RESULT artifact=$ARTIFACT_RESULT fork=$FORK_RESULT"
+
+          if [ "$VALIDATE_RESULT" != "success" ]; then
+            echo "::error::validate did not succeed ($VALIDATE_RESULT)"
+            exit 1
+          fi
+
+          if [ "$IS_FORK" = "true" ]; then
+            if [ "$FORK_RESULT" != "success" ]; then
+              echo "::error::fork-build-test did not succeed ($FORK_RESULT)"
+              exit 1
+            fi
+          else
+            failed=0
+            for pair in "build-candidates:$BUILD_RESULT" "functional-amd64:$AMD64_RESULT" "functional-arm64:$ARM64_RESULT" "artifact-contracts:$ARTIFACT_RESULT"; do
+              name="${pair%%:*}"
+              result="${pair##*:}"
+              if [ "$result" != "success" ]; then
+                echo "::error::$name did not succeed ($result)"
+                failed=1
+              fi
+            done
+            if [ "$failed" -ne 0 ]; then
+              exit 1
+            fi
+          fi
+
+          echo "All required checks for this PR passed."
