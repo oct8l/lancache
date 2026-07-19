@@ -21,9 +21,16 @@ env:
   TEST_TAG: pre-release-test-${{ github.run_number }}
   TRIVY_VERSION: v0.72.0
 
+permissions:
+  contents: read
+
 jobs:
   pre-build-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     outputs:
       should_proceed: ${{ steps.test_decision.outputs.proceed }}
       test_results: ${{ steps.test_summary.outputs.results }}
@@ -303,6 +310,10 @@ jobs:
   trigger-main-build:
     needs: pre-build-test
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
     if: needs.pre-build-test.outputs.should_proceed == 'true'
 
     steps:
@@ -331,6 +342,9 @@ jobs:
   notify-failure:
     needs: pre-build-test
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     if: needs.pre-build-test.outputs.should_proceed != 'true'
 
     steps:

@@ -1,0 +1,66 @@
+name: Validate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # rhysd/actionlint bundles a pinned ShellCheck build, so one image covers both checks.
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+  RENOVATE_IMAGE: renovate/renovate:43.270.1@sha256:6f215fca5f89bbc2b4bee880ffd9e5080f40eac592efa7d5572f03c7a4629308
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: "Lint workflows with actionlint (includes ShellCheck on run: steps)"
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" -w /repo "${ACTIONLINT_IMAGE}" -color
+
+      - name: Validate docker-compose.yml
+        run: docker compose -f docker-compose.yml config -q
+
+      - name: Parse renovate.json with jq
+        run: jq empty renovate.json
+
+      - name: Validate renovate.json against schema
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" -w /repo "${RENOVATE_IMAGE}" \
+            renovate-config-validator --strict renovate.json
+
+      - name: Check for whitespace and conflict-marker errors in the diff
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+
+          if [ -z "${base}" ] || ! git cat-file -e "${base}" 2>/dev/null; then
+            echo "No usable base revision for this event; skipping git diff --check"
+            exit 0
+          fi
+
+          git diff --check "${base}" "${{ github.sha }}"

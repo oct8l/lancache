@@ -1,0 +1,7 @@
+# Agreed ShellCheck severity for CI: info/style findings are advisory and do not
+# fail validation. warning/error findings (real bugs) still fail the build.
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'shellcheck reported issue in this script: SC[0-9]+:info:.+'
+      - 'shellcheck reported issue in this script: SC[0-9]+:style:.+'
