@@ -479,7 +479,7 @@ jobs:
         run: |
           mkdir -p artifact-contract
           echo "lancache-ci-artifact-contract-check-${{ github.run_id }}" > artifact-contract/marker.txt
-          sha256sum artifact-contract/marker.txt > artifact-contract/marker.sha256
+          (cd artifact-contract && sha256sum marker.txt > marker.sha256)
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
