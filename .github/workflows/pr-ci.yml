@@ -242,6 +242,102 @@ jobs:
           docker compose -f test-compose-arm64.yml down -v || true
           rm -rf test-cache test.env test-compose-arm64.yml || true
 
+  # "Startup/function" row of the architecture matrix in TESTING.md for
+  # lancache-generic, which has had no dedicated runtime test until now.
+  component-generic:
+    needs: build-candidates
+    if: success() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GENERIC_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-generic@${{ needs.build-candidates.outputs.generic_digest }}
+      MONOLITHIC_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
+
+    steps:
+      - name: Verify generic is derived from the candidate monolithic base
+        run: |
+          set -euo pipefail
+          docker pull "${GENERIC_IMAGE}" >/dev/null
+          docker pull "${MONOLITHIC_IMAGE}" >/dev/null
+          docker inspect "${MONOLITHIC_IMAGE}" --format '{{json .RootFS.Layers}}' > /tmp/mono_layers.json
+          docker inspect "${GENERIC_IMAGE}" --format '{{json .RootFS.Layers}}' > /tmp/generic_layers.json
+          python3 -c "
+          import json
+          with open('/tmp/mono_layers.json') as f:
+              mono = json.load(f)
+          with open('/tmp/generic_layers.json') as f:
+              gen = json.load(f)
+          if gen[: len(mono)] != mono:
+              raise SystemExit(
+                  'lancache-generic layers are not a superset of lancache-monolithic '
+                  'layers; its base may not be the tested candidate build'
+              )
+          print(f'Verified: generic inherits all {len(mono)} monolithic layers, plus {len(gen) - len(mono)} of its own')
+          "
+
+      - name: Start generic container
+        run: |
+          set -euo pipefail
+          mkdir -p test-cache/cache test-cache/logs
+          chmod 777 test-cache/cache test-cache/logs
+          cat > test.env << 'EOF'
+          LANCACHE_IP=10.66.0.10
+          USE_GENERIC_CACHE=true
+          UPSTREAM_DNS=8.8.8.8
+          CACHE_MAX_AGE=3650d
+          EOF
+          docker run -d --name generic-test \
+            --env-file test.env \
+            -v "$PWD/test-cache/cache:/data/cache" \
+            -v "$PWD/test-cache/logs:/data/logs" \
+            -p 18080:80 \
+            --health-cmd="curl -fsS http://127.0.0.1/lancache-heartbeat" \
+            --health-interval=10s --health-timeout=10s --health-retries=15 --health-start-period=45s \
+            "${GENERIC_IMAGE}"
+
+      - name: Wait for healthy
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            st=$(docker inspect --format '{{.State.Health.Status}}' generic-test)
+            echo "status=${st}"
+            if [ "${st}" = "healthy" ]; then exit 0; fi
+            if [ "${st}" = "unhealthy" ]; then
+              echo "::error::generic reported unhealthy"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::generic did not become healthy in time"
+          exit 1
+
+      - name: Assert running and functional
+        run: |
+          set -euo pipefail
+          st=$(docker inspect --format '{{.State.Status}}' generic-test)
+          if [ "${st}" != "running" ]; then
+            echo "::error::generic container is not running (status: ${st})"
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: lancache.steamcontent.com' http://127.0.0.1:18080/lancache-heartbeat)
+          if [ "${code}" != "200" ] && [ "${code}" != "204" ]; then
+            echo "::error::expected 200/204 from generic heartbeat, got ${code}"
+            exit 1
+          fi
+          echo "generic is running and functional (HTTP ${code})"
+
+      - name: Collect diagnostics
+        if: failure()
+        run: docker logs generic-test || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f generic-test || true
+          rm -rf test-cache test.env || true
+
   # Exercises actions/upload-artifact and actions/download-artifact directly so a
   # Renovate PR bumping either action runs the exact dependency it changes.
   artifact-contracts:
@@ -412,6 +508,7 @@ jobs:
       - build-candidates
       - functional-amd64
       - functional-arm64
+      - component-generic
       - artifact-contracts
       - fork-build-test
     if: always()
@@ -427,11 +524,12 @@ jobs:
           BUILD_RESULT: ${{ needs.build-candidates.result }}
           AMD64_RESULT: ${{ needs.functional-amd64.result }}
           ARM64_RESULT: ${{ needs.functional-arm64.result }}
+          GENERIC_RESULT: ${{ needs.component-generic.result }}
           ARTIFACT_RESULT: ${{ needs.artifact-contracts.result }}
           FORK_RESULT: ${{ needs.fork-build-test.result }}
         run: |
           set -euo pipefail
-          echo "is_fork=$IS_FORK validate=$VALIDATE_RESULT build=$BUILD_RESULT amd64=$AMD64_RESULT arm64=$ARM64_RESULT artifact=$ARTIFACT_RESULT fork=$FORK_RESULT"
+          echo "is_fork=$IS_FORK validate=$VALIDATE_RESULT build=$BUILD_RESULT amd64=$AMD64_RESULT arm64=$ARM64_RESULT generic=$GENERIC_RESULT artifact=$ARTIFACT_RESULT fork=$FORK_RESULT"
 
           if [ "$VALIDATE_RESULT" != "success" ]; then
             echo "::error::validate did not succeed ($VALIDATE_RESULT)"
@@ -445,7 +543,7 @@ jobs:
             fi
           else
             failed=0
-            for pair in "build-candidates:$BUILD_RESULT" "functional-amd64:$AMD64_RESULT" "functional-arm64:$ARM64_RESULT" "artifact-contracts:$ARTIFACT_RESULT"; do
+            for pair in "build-candidates:$BUILD_RESULT" "functional-amd64:$AMD64_RESULT" "functional-arm64:$ARM64_RESULT" "component-generic:$GENERIC_RESULT" "artifact-contracts:$ARTIFACT_RESULT"; do
               name="${pair%%:*}"
               result="${pair##*:}"
               if [ "$result" != "success" ]; then
