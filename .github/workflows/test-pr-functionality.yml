@@ -9,9 +9,16 @@ env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
   PR_TAG: pr-${{ github.event.pull_request.number }}
 
+permissions:
+  contents: read
+
 jobs:
   wait-for-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      checks: read
     steps:
       - name: Wait for PR build to complete
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -62,6 +69,9 @@ jobs:
   functional-test-amd64:
     needs: wait-for-build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     strategy:
       matrix:
         test-scenario:
@@ -259,6 +269,9 @@ jobs:
   functional-test-arm64:
     needs: wait-for-build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -347,6 +360,9 @@ jobs:
   test-summary:
     needs: [functional-test-amd64, functional-test-arm64]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     if: always()
     steps:
       - name: Test Results Summary
