@@ -15,6 +15,17 @@
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "aquasecurity/trivy"
+    },
+    {
+      "customType": "regex",
+      "description": "Go builder image pinned for lancache-dns's dnstool build stage (upstream pins an old golang:1.23.1-alpine with unpatched stdlib CVEs)",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/build-candidates\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "DNS_GO_BUILDER_IMAGE:\\s*(?<depName>golang):(?<currentValue>[\\w.-]+)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
