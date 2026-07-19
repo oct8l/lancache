@@ -1,0 +1,391 @@
+name: Release
+
+# Single pipeline for every path that can publish images: push to main, a
+# version tag, manual dispatch, or the twice-monthly schedule. Replaces the
+# previous build.yml (which built and pushed unconditionally, including on
+# its own independent schedule) and test-scheduled-functionality.yml (which
+# ran on a second, separate schedule and then called `gh workflow run
+# build.yml` to kick off that independent build/push regardless of whether
+# its own tests had actually gated it). Neither of those two schedules could
+# actually block the other from publishing.
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+  schedule:
+    - cron: '30 4 1,15 * *'
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  CANDIDATE_TAG: candidate-${{ github.run_id }}
+  TRIVY_VERSION: v0.72.0
+
+jobs:
+  resolve-upstream-shas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      ubuntu_sha: ${{ steps.resolve.outputs.ubuntu_sha }}
+      ubuntu_nginx_sha: ${{ steps.resolve.outputs.ubuntu_nginx_sha }}
+      monolithic_sha: ${{ steps.resolve.outputs.monolithic_sha }}
+      generic_sha: ${{ steps.resolve.outputs.generic_sha }}
+      sniproxy_sha: ${{ steps.resolve.outputs.sniproxy_sha }}
+      dns_sha: ${{ steps.resolve.outputs.dns_sha }}
+    steps:
+      - name: Resolve upstream commit SHAs
+        id: resolve
+        run: |
+          set -euo pipefail
+          resolve() {
+            git ls-remote "$1" master | cut -f1
+          }
+          {
+            echo "ubuntu_sha=$(resolve https://github.com/lancachenet/ubuntu.git)"
+            echo "ubuntu_nginx_sha=$(resolve https://github.com/lancachenet/ubuntu-nginx.git)"
+            echo "monolithic_sha=$(resolve https://github.com/lancachenet/monolithic.git)"
+            echo "generic_sha=$(resolve https://github.com/lancachenet/generic.git)"
+            echo "sniproxy_sha=$(resolve https://github.com/lancachenet/sniproxy.git)"
+            echo "dns_sha=$(resolve https://github.com/lancachenet/lancache-dns.git)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Record resolved SHAs in the job summary
+        run: |
+          {
+            echo "## Resolved upstream commits for this run"
+            echo ""
+            echo "| Repository | SHA |"
+            echo "| --- | --- |"
+            echo "| lancachenet/ubuntu | ${{ steps.resolve.outputs.ubuntu_sha }} |"
+            echo "| lancachenet/ubuntu-nginx | ${{ steps.resolve.outputs.ubuntu_nginx_sha }} |"
+            echo "| lancachenet/monolithic | ${{ steps.resolve.outputs.monolithic_sha }} |"
+            echo "| lancachenet/generic | ${{ steps.resolve.outputs.generic_sha }} |"
+            echo "| lancachenet/sniproxy | ${{ steps.resolve.outputs.sniproxy_sha }} |"
+            echo "| lancachenet/lancache-dns | ${{ steps.resolve.outputs.dns_sha }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write resolved SHAs artifact
+        run: |
+          cat > upstream-shas.json << EOF
+          {
+            "ubuntu": "${{ steps.resolve.outputs.ubuntu_sha }}",
+            "ubuntu_nginx": "${{ steps.resolve.outputs.ubuntu_nginx_sha }}",
+            "monolithic": "${{ steps.resolve.outputs.monolithic_sha }}",
+            "generic": "${{ steps.resolve.outputs.generic_sha }}",
+            "sniproxy": "${{ steps.resolve.outputs.sniproxy_sha }}",
+            "dns": "${{ steps.resolve.outputs.dns_sha }}"
+          }
+          EOF
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-shas-${{ github.run_id }}
+          path: upstream-shas.json
+          retention-days: 90
+
+  # Builds once, from the exact resolved SHAs above. release-promote retags
+  # these same digests later; nothing is ever rebuilt after this point.
+  build-candidates:
+    needs: resolve-upstream-shas
+    uses: ./.github/workflows/build-candidates.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image_tag: candidate-${{ github.run_id }}
+      ubuntu_ref: ${{ needs.resolve-upstream-shas.outputs.ubuntu_sha }}
+      ubuntu_nginx_ref: ${{ needs.resolve-upstream-shas.outputs.ubuntu_nginx_sha }}
+      monolithic_ref: ${{ needs.resolve-upstream-shas.outputs.monolithic_sha }}
+      generic_ref: ${{ needs.resolve-upstream-shas.outputs.generic_sha }}
+      sniproxy_ref: ${{ needs.resolve-upstream-shas.outputs.sniproxy_sha }}
+      dns_ref: ${{ needs.resolve-upstream-shas.outputs.dns_sha }}
+
+  # Same deterministic test tests/cache-integration/ uses for every PR (see
+  # pr-ci.yml's functional-amd64), run here against the release candidates.
+  functional-test:
+    needs: build-candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DNS_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}
+      MONOLITHIC_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Start fixture topology
+        working-directory: tests/cache-integration
+        run: docker compose up -d --build
+
+      - name: Run cache integration tests
+        working-directory: tests/cache-integration
+        run: bash run-integration-tests.sh
+
+      - name: Collect diagnostics
+        if: failure()
+        working-directory: tests/cache-integration
+        run: |
+          docker compose ps
+          docker compose logs dns
+          docker compose logs monolithic
+          docker compose logs origin
+
+      - name: Cleanup
+        if: always()
+        working-directory: tests/cache-integration
+        run: docker compose down -v || true
+
+  # Advisory for now (matches the previous behavior in
+  # test-scheduled-functionality.yml): findings are recorded but do not block
+  # release-gate. Making this properly blocking needs a reviewed baseline so
+  # existing debt doesn't permanently wedge releases; that's tracked as a
+  # follow-up (see TESTING.md) rather than done here.
+  security-scan:
+    needs: build-candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Install Trivy
+        run: |
+          set -euo pipefail
+          trivy_version_num="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${trivy_version_num}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          tar -xzf /tmp/trivy.tgz -C /tmp trivy
+          install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version
+
+      - name: Scan candidate images for HIGH/CRITICAL vulnerabilities
+        run: |
+          set -euo pipefail
+          images=(
+            "${REGISTRY}/lancache-ubuntu@${{ needs.build-candidates.outputs.ubuntu_digest }}"
+            "${REGISTRY}/lancache-ubuntu-nginx@${{ needs.build-candidates.outputs.ubuntu_nginx_digest }}"
+            "${REGISTRY}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}"
+            "${REGISTRY}/lancache-generic@${{ needs.build-candidates.outputs.generic_digest }}"
+            "${REGISTRY}/lancache-sniproxy@${{ needs.build-candidates.outputs.sniproxy_digest }}"
+            "${REGISTRY}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}"
+          )
+          failed=0
+          for image in "${images[@]}"; do
+            echo "Scanning ${image}"
+            if ! trivy image --exit-code 1 --severity HIGH,CRITICAL --quiet "${image}"; then
+              echo "::warning::HIGH/CRITICAL vulnerabilities found in ${image}"
+              failed=1
+            fi
+          done
+          if [ "${failed}" -ne 0 ]; then
+            echo "security_result=failure" >> "$GITHUB_OUTPUT"
+          else
+            echo "security_result=success" >> "$GITHUB_OUTPUT"
+          fi
+
+  release-gate:
+    name: release-gate
+    needs:
+      - resolve-upstream-shas
+      - build-candidates
+      - functional-test
+      - security-scan
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.evaluate.outputs.proceed }}
+    steps:
+      - name: Evaluate required results
+        id: evaluate
+        env:
+          RESOLVE_RESULT: ${{ needs.resolve-upstream-shas.result }}
+          BUILD_RESULT: ${{ needs.build-candidates.result }}
+          TEST_RESULT: ${{ needs.functional-test.result }}
+          SECURITY_RESULT: ${{ needs.security-scan.result }}
+        run: |
+          set -euo pipefail
+          echo "resolve=${RESOLVE_RESULT} build=${BUILD_RESULT} test=${TEST_RESULT} security=${SECURITY_RESULT}"
+
+          if [ "${SECURITY_RESULT}" = "failure" ]; then
+            echo "::warning::security-scan reported findings; not blocking release (see TESTING.md)"
+          fi
+
+          failed=0
+          for pair in "resolve-upstream-shas:${RESOLVE_RESULT}" "build-candidates:${BUILD_RESULT}" "functional-test:${TEST_RESULT}"; do
+            name="${pair%%:*}"
+            result="${pair##*:}"
+            if [ "${result}" != "success" ]; then
+              echo "::error::${name} did not succeed (${result})"
+              failed=1
+            fi
+          done
+
+          if [ "${failed}" -ne 0 ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+  # Registry-side retag only: never rebuilds. If release-gate didn't
+  # succeed, this job doesn't run at all, so a test failure cannot leave a
+  # release tag pointing at an untested (or differently-built) image.
+  promote:
+    needs:
+      - release-gate
+      - build-candidates
+      - resolve-upstream-shas
+    if: needs.release-gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Determine release tags for this trigger
+        id: tags
+        run: |
+          set -euo pipefail
+          {
+            echo "latest"
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              echo "${{ github.ref_name }}"
+            fi
+          } > /tmp/release-tags.txt
+          cat /tmp/release-tags.txt
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Login to Github Packages
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote tested candidate digests to release tags
+        env:
+          UBUNTU_DIGEST: ${{ needs.build-candidates.outputs.ubuntu_digest }}
+          UBUNTU_NGINX_DIGEST: ${{ needs.build-candidates.outputs.ubuntu_nginx_digest }}
+          MONOLITHIC_DIGEST: ${{ needs.build-candidates.outputs.monolithic_digest }}
+          GENERIC_DIGEST: ${{ needs.build-candidates.outputs.generic_digest }}
+          SNIPROXY_DIGEST: ${{ needs.build-candidates.outputs.sniproxy_digest }}
+          DNS_DIGEST: ${{ needs.build-candidates.outputs.dns_digest }}
+        run: |
+          set -euo pipefail
+          while read -r tag; do
+            docker buildx imagetools create --tag "${REGISTRY}/lancache-ubuntu:${tag}" "${REGISTRY}/lancache-ubuntu@${UBUNTU_DIGEST}"
+            docker buildx imagetools create --tag "${REGISTRY}/lancache-ubuntu-nginx:${tag}" "${REGISTRY}/lancache-ubuntu-nginx@${UBUNTU_NGINX_DIGEST}"
+            docker buildx imagetools create --tag "${REGISTRY}/lancache-monolithic:${tag}" "${REGISTRY}/lancache-monolithic@${MONOLITHIC_DIGEST}"
+            docker buildx imagetools create --tag "${REGISTRY}/lancache-generic:${tag}" "${REGISTRY}/lancache-generic@${GENERIC_DIGEST}"
+            docker buildx imagetools create --tag "${REGISTRY}/lancache-sniproxy:${tag}" "${REGISTRY}/lancache-sniproxy@${SNIPROXY_DIGEST}"
+            docker buildx imagetools create --tag "${REGISTRY}/lancache-dns:${tag}" "${REGISTRY}/lancache-dns@${DNS_DIGEST}"
+          done < /tmp/release-tags.txt
+
+      - name: Verify promoted tags resolve to the tested digests
+        env:
+          UBUNTU_DIGEST: ${{ needs.build-candidates.outputs.ubuntu_digest }}
+          UBUNTU_NGINX_DIGEST: ${{ needs.build-candidates.outputs.ubuntu_nginx_digest }}
+          MONOLITHIC_DIGEST: ${{ needs.build-candidates.outputs.monolithic_digest }}
+          GENERIC_DIGEST: ${{ needs.build-candidates.outputs.generic_digest }}
+          SNIPROXY_DIGEST: ${{ needs.build-candidates.outputs.sniproxy_digest }}
+          DNS_DIGEST: ${{ needs.build-candidates.outputs.dns_digest }}
+        run: |
+          set -euo pipefail
+          verify() {
+            local name="$1" expected="$2" tag="$3"
+            local dst="${REGISTRY}/lancache-${name}:${tag}"
+            local actual
+            actual=$(docker buildx imagetools inspect "${dst}" --format '{{json .Manifest}}' | jq -r '.digest')
+            if [ "${actual}" != "${expected}" ]; then
+              echo "::error::${dst} resolved to ${actual}, expected ${expected}"
+              exit 1
+            fi
+            echo "Verified ${dst} -> ${actual}"
+          }
+          while read -r tag; do
+            verify ubuntu "${UBUNTU_DIGEST}" "${tag}"
+            verify ubuntu-nginx "${UBUNTU_NGINX_DIGEST}" "${tag}"
+            verify monolithic "${MONOLITHIC_DIGEST}" "${tag}"
+            verify generic "${GENERIC_DIGEST}" "${tag}"
+            verify sniproxy "${SNIPROXY_DIGEST}" "${tag}"
+            verify dns "${DNS_DIGEST}" "${tag}"
+          done < /tmp/release-tags.txt
+
+      - name: Record promotion summary
+        run: |
+          {
+            echo "## Release promotion"
+            echo ""
+            echo "Promoted tags: $(tr '\n' ' ' < /tmp/release-tags.txt)"
+            echo ""
+            echo "Upstream commits:"
+            echo "- lancachenet/ubuntu: \`${{ needs.resolve-upstream-shas.outputs.ubuntu_sha }}\`"
+            echo "- lancachenet/ubuntu-nginx: \`${{ needs.resolve-upstream-shas.outputs.ubuntu_nginx_sha }}\`"
+            echo "- lancachenet/monolithic: \`${{ needs.resolve-upstream-shas.outputs.monolithic_sha }}\`"
+            echo "- lancachenet/generic: \`${{ needs.resolve-upstream-shas.outputs.generic_sha }}\`"
+            echo "- lancachenet/sniproxy: \`${{ needs.resolve-upstream-shas.outputs.sniproxy_sha }}\`"
+            echo "- lancachenet/lancache-dns: \`${{ needs.resolve-upstream-shas.outputs.dns_sha }}\`"
+            echo ""
+            echo "Promoted image digests:"
+            echo "- lancache-ubuntu@${{ needs.build-candidates.outputs.ubuntu_digest }}"
+            echo "- lancache-ubuntu-nginx@${{ needs.build-candidates.outputs.ubuntu_nginx_digest }}"
+            echo "- lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}"
+            echo "- lancache-generic@${{ needs.build-candidates.outputs.generic_digest }}"
+            echo "- lancache-sniproxy@${{ needs.build-candidates.outputs.sniproxy_digest }}"
+            echo "- lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Best-effort: deletes old candidate-<run-id> package versions, keeping the
+  # most recent few for post-mortem debugging. Requires the token used here to
+  # have package delete rights, which the default GITHUB_TOKEN may not have
+  # depending on repository/package settings (tracked as an external setting
+  # to confirm in TESTING.md) — failures here are logged, not fatal.
+  cleanup-candidates:
+    needs: promote
+    if: always() && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    continue-on-error: true
+    steps:
+      - name: Delete old candidate package versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          keep=3
+          for image in ubuntu ubuntu-nginx monolithic generic sniproxy dns; do
+            package="lancache-${image}"
+            echo "Checking versions for ${package}"
+            versions=$(gh api "/users/${{ github.repository_owner }}/packages/container/${package}/versions" --paginate \
+              --jq '[.[] | select((.metadata.container.tags // []) | any(startswith("candidate-")))] | sort_by(.created_at) | reverse') || {
+              echo "::warning::could not list versions for ${package} (insufficient token permissions?)"
+              continue
+            }
+            total=$(echo "${versions}" | jq 'length')
+            if [ "${total}" -le "${keep}" ]; then
+              echo "Only ${total} candidate version(s), nothing to clean up"
+              continue
+            fi
+            echo "${versions}" | jq -r ".[${keep}:] | .[].id" | while read -r version_id; do
+              echo "Deleting ${package} version ${version_id}"
+              gh api --method DELETE "/users/${{ github.repository_owner }}/packages/container/${package}/versions/${version_id}" \
+                || echo "::warning::failed to delete ${package} version ${version_id}"
+            done
+          done
