@@ -1,0 +1,72 @@
+services:
+  dns:
+    image: ${DNS_IMAGE:?DNS_IMAGE must be set}
+    env_file: env/dns.env
+    networks:
+      cache_test:
+        ipv4_address: 10.24.0.10
+    healthcheck:
+      # A real cache-domain name is used rather than "localhost" so a
+      # response requires the RPZ zone to actually be bootstrapped, not
+      # just the server process to be listening.
+      test: ["CMD", "nslookup", "lancache.steamcontent.com", "127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  monolithic:
+    image: ${MONOLITHIC_IMAGE:?MONOLITHIC_IMAGE must be set}
+    env_file: env/monolithic.env
+    volumes:
+      - cache-data:/data/cache
+      - cache-logs:/data/logs
+    networks:
+      cache_test:
+        ipv4_address: 10.24.0.11
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/lancache-heartbeat"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  origin:
+    build:
+      context: .
+      dockerfile: origin/Dockerfile
+    networks:
+      cache_test:
+        ipv4_address: 10.24.0.20
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  client:
+    build:
+      context: client
+    dns:
+      - 10.24.0.10
+    networks:
+      - cache_test
+    depends_on:
+      dns:
+        condition: service_healthy
+      monolithic:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+
+networks:
+  cache_test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.24.0.0/24
+
+volumes:
+  cache-data:
+  cache-logs:
