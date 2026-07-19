@@ -54,14 +54,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Cache Docker layers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
       - name: Login to Github Packages
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
@@ -77,8 +69,8 @@ jobs:
           cd ubuntu
           docker buildx build \
             --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache,mode=max" \
             -t "${REGISTRY}/lancache-ubuntu:${IMAGE_TAG}" \
             --push \
             --metadata-file /tmp/meta-ubuntu.json .
@@ -95,8 +87,8 @@ jobs:
           cat Dockerfile
           docker buildx build \
             --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache,mode=max" \
             -t "${REGISTRY}/lancache-ubuntu-nginx:${IMAGE_TAG}" \
             --push \
             --metadata-file /tmp/meta-ubuntu-nginx.json .
@@ -114,8 +106,8 @@ jobs:
           cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
           docker buildx build \
             --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache,mode=max" \
             -t "${REGISTRY}/lancache-monolithic:${IMAGE_TAG}" \
             --push \
             --metadata-file /tmp/meta-monolithic.json .
@@ -132,8 +124,8 @@ jobs:
           cat Dockerfile
           docker buildx build \
             --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-generic:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-generic:buildcache,mode=max" \
             -t "${REGISTRY}/lancache-generic:${IMAGE_TAG}" \
             --push \
             --metadata-file /tmp/meta-generic.json .
@@ -147,8 +139,8 @@ jobs:
           cd sniproxy
           docker buildx build \
             --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-sniproxy:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-sniproxy:buildcache,mode=max" \
             -t "${REGISTRY}/lancache-sniproxy:${IMAGE_TAG}" \
             --push \
             --metadata-file /tmp/meta-sniproxy.json .
@@ -165,17 +157,12 @@ jobs:
           cat Dockerfile
           docker buildx build \
             --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-dns:buildcache" \
+            --cache-to "type=registry,ref=${REGISTRY}/lancache-dns:buildcache,mode=max" \
             -t "${REGISTRY}/lancache-dns:${IMAGE_TAG}" \
             --push \
             --metadata-file /tmp/meta-dns.json .
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/meta-dns.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Move cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
       - name: Record candidate digests
         run: |
@@ -524,7 +511,9 @@ jobs:
           set -euo pipefail
           git clone https://github.com/lancachenet/ubuntu.git
           cd ubuntu
-          docker buildx build --platform linux/amd64 -t lancache-ubuntu:fork-local --load .
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu:buildcache" \
+            -t lancache-ubuntu:fork-local --load .
 
       - name: Build lancachenet/ubuntu-nginx (amd64 only, no push)
         run: |
@@ -533,7 +522,9 @@ jobs:
           cd ubuntu-nginx
           line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
           sed -i "${line_number}cFROM lancache-ubuntu:fork-local" Dockerfile
-          docker buildx build --platform linux/amd64 -t lancache-ubuntu-nginx:fork-local --load .
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-ubuntu-nginx:buildcache" \
+            -t lancache-ubuntu-nginx:fork-local --load .
 
       - name: Build lancachenet/monolithic (amd64 only, no push)
         run: |
@@ -543,7 +534,9 @@ jobs:
           line_number=$(grep -n "FROM lancachenet/ubuntu-nginx:latest" Dockerfile | cut -d: -f1)
           sed -i "${line_number}cFROM lancache-ubuntu-nginx:fork-local" Dockerfile
           cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
-          docker buildx build --platform linux/amd64 -t lancache-monolithic:fork-local --load .
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-monolithic:buildcache" \
+            -t lancache-monolithic:fork-local --load .
 
       - name: Build lancachenet/lancache-dns (amd64 only, no push)
         run: |
@@ -552,7 +545,9 @@ jobs:
           cd lancache-dns
           line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
           sed -i "${line_number}cFROM lancache-ubuntu:fork-local" Dockerfile
-          docker buildx build --platform linux/amd64 -t lancache-dns:fork-local --load .
+          docker buildx build --platform linux/amd64 \
+            --cache-from "type=registry,ref=${REGISTRY}/lancache-dns:buildcache" \
+            -t lancache-dns:fork-local --load .
 
       - name: Smoke test locally built images
         run: |
