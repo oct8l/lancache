@@ -101,7 +101,7 @@ build-candidates (reusable, shared with pr-ci.yml)
 4. **`security-scan`**: Trivy scan of the exact candidate digests (HIGH/CRITICAL). Advisory only for now, matching the previous behavior — see the known gap below.
 5. **`release-gate`**: fails if `resolve-upstream-shas`, `build-candidates`, or `functional-test` did not succeed. A `security-scan` failure is logged as a warning but does not block.
 6. **`promote`**: only runs if `release-gate` succeeded. Retags the tested candidate digests to `latest` (and to the pushed tag name, for a `v*.*.*` push) using `docker buildx imagetools create` — a registry-side manifest copy, not a rebuild — then verifies each promoted tag resolves back to the exact digest that was tested.
-7. **`cleanup-candidates`**: best-effort deletion of old `candidate-<run-id>` package versions via the GitHub API, keeping the most recent few. Marked `continue-on-error`, since the default `GITHUB_TOKEN` may not have package-delete rights depending on repository/package settings — if deletions consistently fail, that's a repository setting to confirm, not a workflow bug.
+7. **`cleanup-candidates`**: best-effort deletion of old `candidate-<run-id>` package versions via the GitHub API, keeping the most recent few. Never deletes a version that also carries `latest` or a `vX.Y.Z` tag — `promote` retags by digest rather than rebuilding, so a just-promoted candidate version and the live release tag can be the same underlying version object (GHCR merges tags pointing at one digest). Marked `continue-on-error`, since the default `GITHUB_TOKEN` may not have package-delete rights depending on repository/package settings — if deletions consistently fail, that's a repository setting to confirm, not a workflow bug.
 
 **Blocking criteria**:
 

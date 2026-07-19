@@ -92,7 +92,9 @@ jobs:
         with:
           name: upstream-shas-${{ github.run_id }}
           path: upstream-shas.json
-          retention-days: 90
+          # 90 was requested but this repository's max is 20; matching it
+          # directly avoids a "using 20 instead" annotation on every run.
+          retention-days: 20
 
   # Builds once, from the exact resolved SHAs above. release-promote retags
   # these same digests later; nothing is ever rebuilt after this point.
@@ -373,8 +375,24 @@ jobs:
           for image in ubuntu ubuntu-nginx monolithic generic sniproxy dns; do
             package="lancache-${image}"
             echo "Checking versions for ${package}"
-            versions=$(gh api "/users/${{ github.repository_owner }}/packages/container/${package}/versions" --paginate \
-              --jq '[.[] | select((.metadata.container.tags // []) | any(startswith("candidate-")))] | sort_by(.created_at) | reverse') || {
+            # No --paginate: it applies --jq per page rather than to the
+            # combined result (and is incompatible with --slurp), so a single
+            # large page is simpler and correct. 100 versions is far more
+            # than these packages should ever accumulate with cleanup running.
+            #
+            # A version is only eligible for deletion if it's candidate-tagged
+            # AND carries neither "latest" nor a vX.Y.Z tag. promote retags by
+            # digest rather than rebuilding, so a just-promoted candidate
+            # version and the "latest"/version tag are the same underlying
+            # version object (GHCR merges tags that point at one digest);
+            # deleting it would delete the live published tag along with it.
+            versions=$(gh api "/users/${{ github.repository_owner }}/packages/container/${package}/versions?per_page=100" \
+              --jq '[.[] | select(
+                  (.metadata.container.tags // []) as $tags
+                  | ($tags | any(startswith("candidate-")))
+                  and (($tags | any(. == "latest")) | not)
+                  and (($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | not)
+                )] | sort_by(.created_at) | reverse') || {
               echo "::warning::could not list versions for ${package} (insufficient token permissions?)"
               continue
             }
