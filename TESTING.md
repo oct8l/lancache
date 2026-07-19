@@ -41,6 +41,7 @@ build-candidates (same-repo PRs) --or-- fork-build-test (external fork PRs)
    |
    +--> functional-amd64
    +--> functional-arm64
+   +--> component-generic
    +--> artifact-contracts
               |
            ci-gate
@@ -81,11 +82,13 @@ Every image is built for AMD64, ARM64, and ARMv7 (`build-candidates.yml`), which
 | `lancache-ubuntu` | Build/smoke | Build/smoke | Build/smoke | Starts and runs a basic command | Manifest-verified; no dedicated runtime smoke test yet |
 | `lancache-ubuntu-nginx` | Build/smoke | Build/smoke | Build/smoke | Nginx starts and config validates | Manifest-verified; no dedicated runtime smoke test yet |
 | `lancache-monolithic` | Full integration | Core integration | Startup/heartbeat | DNS-to-cache and content behavior | AMD64 full + ARM64 core done; ARMv7 pending |
-| `lancache-generic` | Startup/function | Startup/function | Startup | Derived image uses the intended candidate base | Pending |
+| `lancache-generic` | Startup/function | Startup/function | Startup | Derived image uses the intended candidate base | AMD64 done (`component-generic`); ARM64/ARMv7 pending |
 | `lancache-sniproxy` | Startup/TLS path | Startup/TLS path | Startup | TLS pass-through reaches a controlled origin | Pending |
 | `lancache-dns` | Full DNS | Core DNS | Startup/query | Cacheable and forwarded lookups work | AMD64 full + ARM64 core done; ARMv7 pending |
 
-> **Known gap (tracked for follow-up PRs)**: `generic` and `sniproxy` have no dedicated runtime test at all today (only a manifest-platform check), and no image has ARMv7 runtime coverage yet — ARMv7 QEMU emulation is slow enough that it's planned for the release-gate's deeper suite rather than every PR, per the plan's "fast required suite, deeper scheduled suite" principle. The repository's own `docker-compose.yml` is not yet tested against candidate images either.
+`component-generic` verifies "derived image uses the intended candidate base" directly: it compares `lancache-generic`'s and `lancache-monolithic`'s `RootFS.Layers` and asserts monolithic's full layer list is an exact prefix of generic's — since layers are content-addressed, this proves generic's `FROM` really resolved to the tested candidate monolithic digest (not a stale or wrong base) without needing any custom build-time markers.
+
+> **Known gap (tracked for follow-up PRs)**: `sniproxy` has no dedicated runtime test at all today (only a manifest-platform check), and no image has ARMv7 or ARM64 (for `generic`) runtime coverage yet — ARMv7 QEMU emulation is slow enough that it's planned for the release-gate's deeper suite rather than every PR, per the plan's "fast required suite, deeper scheduled suite" principle. The repository's own `docker-compose.yml` is not yet tested against candidate images either.
 
 ### 3. Release (`.github/workflows/release.yml`)
 
