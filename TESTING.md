@@ -4,12 +4,13 @@ This document describes the comprehensive testing infrastructure for the LanCach
 
 ## Overview
 
-The testing system consists of four workflows that provide comprehensive validation:
+The testing system consists of five workflows that provide comprehensive validation:
 
 1. **Validate** - Static validation of workflows, Compose, and Renovate config
 2. **PR CI** - Validates every pull request and gates merges via `ci-gate`
 3. **Release** - Builds, tests, and promotes release images via `release-gate`
-4. **Performance Tests** - Manual performance and load testing
+4. **MegaLinter** - Advisory-only Dockerfile/secret/YAML/Python linting, not part of `ci-gate`
+5. **Performance Tests** - Manual performance and load testing
 
 Candidate builds are shared: `build-candidates.yml` is a reusable workflow called by both **PR CI** and **Release**, so the same build logic (and its safety checks) runs regardless of which pipeline triggered it.
 
@@ -131,7 +132,22 @@ build-candidates (reusable, shared with pr-ci.yml)
 
 - ❌ Failure to resolve upstream SHAs, build candidates, pass the functional test, or pass the security scan blocks promotion entirely — no tag changes.
 
-### 4. Performance Tests (`.github/workflows/performance-tests.yml`)
+### 4. MegaLinter (`.github/workflows/megalinter.yml`)
+
+**Triggers**: Every pull request (lints only the diff against `main`), and manual `workflow_dispatch` (lints the whole codebase).
+
+Advisory only — deliberately **not** part of `ci-gate`, so a finding here never blocks a merge. No PR comments and no automatic fixes (`APPLY_FIXES: none`, `GITHUB_COMMENT_REPORTER: false`); results are visible via the job's own log and an uploaded `megalinter-reports` artifact.
+
+Uses the `cupcake` flavor (`oxsecurity/megalinter/flavors/cupcake`), but scoped via `.mega-linter.yml` to a small linter whitelist rather than everything cupcake bundles:
+
+- `DOCKERFILE_HADOLINT` — the actual gap this closes; none of the Dockerfiles under `tests/` had any linting before.
+- `REPOSITORY_GITLEAKS`, `REPOSITORY_SECRETLINT`, `REPOSITORY_TRUFFLEHOG` — three independent secret scanners.
+- `YAML_YAMLLINT` — general YAML lint beyond actionlint's GitHub-Actions-specific syntax checks (see `.yamllint.yml` for the two rules disabled: `document-start`/`truthy`, which fire on nearly every real GitHub Actions workflow, plus `line-length`, a style opinion rather than a correctness check).
+- `PYTHON_MYPY`, `PYTHON_PYRIGHT` — type checking for `tests/cache-integration/origin/server.py` and `generate-fixture.py`.
+
+Explicitly **not** enabled: cupcake's IaC scanners (`checkov`, `kics`) mostly flag disposable CI test fixtures for missing production-grade hardening (no `USER`, no healthcheck, privileged ports the repository's real `docker-compose.yml` legitimately needs) rather than real problems, and its formatters (`shfmt`, `black`, `prettier`, `markdown-table-formatter`) are style opinions, not correctness checks — consistent with not enabling formatters elsewhere in this repo's tooling.
+
+### 5. Performance Tests (`.github/workflows/performance-tests.yml`)
 
 **Triggers**: Manual only (`workflow_dispatch`)
 

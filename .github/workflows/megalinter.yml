@@ -1,0 +1,51 @@
+name: MegaLinter
+
+# Advisory only, deliberately not part of ci-gate: this is meant to surface
+# findings (Dockerfile lint, secret scanning, YAML lint, Python typing) for
+# visibility, not to block merges. See .mega-linter.yml for why it's scoped
+# to a small linter whitelist instead of the whole cupcake flavor.
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: megalinter-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  megalinter:
+    name: MegaLinter
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: MegaLinter
+        id: ml
+        uses: oxsecurity/megalinter/flavors/cupcake@ef3e84b8b836d76db562d0f3ed7da61e8fd538bc # v9.6.0
+        env:
+          # PRs lint only the diff against main (fast); manual runs check
+          # the whole codebase.
+          VALIDATE_ALL_CODEBASE: ${{ github.event_name == 'workflow_dispatch' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Archive MegaLinter report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: megalinter-reports
+          include-hidden-files: "true"
+          path: |
+            megalinter-reports
+            mega-linter.log
+          retention-days: 20
