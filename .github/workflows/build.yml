@@ -36,14 +36,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Cache Docker layers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
       - name: Login to Github Packages
         if: github.event_name != 'pull_request'
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
@@ -56,7 +48,10 @@ jobs:
         run: |
           git clone https://github.com/lancachenet/ubuntu.git
           cd ubuntu
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-ubuntu --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${{ env.REGISTRY }}/lancache-ubuntu:buildcache" \
+            --cache-to "type=registry,ref=${{ env.REGISTRY }}/lancache-ubuntu:buildcache,mode=max" \
+            -t ${{ env.REGISTRY }}/lancache-ubuntu --push .
           cd ..
 
       - name: Build & Push lancachenet/ubuntu-nginx
@@ -66,7 +61,10 @@ jobs:
           line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
           sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-ubuntu" Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-ubuntu-nginx --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${{ env.REGISTRY }}/lancache-ubuntu-nginx:buildcache" \
+            --cache-to "type=registry,ref=${{ env.REGISTRY }}/lancache-ubuntu-nginx:buildcache,mode=max" \
+            -t ${{ env.REGISTRY }}/lancache-ubuntu-nginx --push .
           cd ..
 
       - name: Build & Push lancachenet/monolithic
@@ -77,7 +75,10 @@ jobs:
           sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-ubuntu-nginx" Dockerfile
           cat Dockerfile
           cp ../20_cache.conf overlay/etc/nginx/sites-available/cache.conf.d/root/20_cache.conf
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-monolithic --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${{ env.REGISTRY }}/lancache-monolithic:buildcache" \
+            --cache-to "type=registry,ref=${{ env.REGISTRY }}/lancache-monolithic:buildcache,mode=max" \
+            -t ${{ env.REGISTRY }}/lancache-monolithic --push .
           cd ..
 
       - name: Build & Push lancachenet/generic
@@ -87,14 +88,20 @@ jobs:
           line_number=$(grep -n "FROM lancachenet/monolithic:latest" Dockerfile | cut -d: -f1)
           sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-monolithic" Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-generic --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${{ env.REGISTRY }}/lancache-generic:buildcache" \
+            --cache-to "type=registry,ref=${{ env.REGISTRY }}/lancache-generic:buildcache,mode=max" \
+            -t ${{ env.REGISTRY }}/lancache-generic --push .
           cd ..
 
       - name: Build & Push lancachenet/sniproxy
         run: |
           git clone https://github.com/lancachenet/sniproxy.git
           cd sniproxy
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-sniproxy --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${{ env.REGISTRY }}/lancache-sniproxy:buildcache" \
+            --cache-to "type=registry,ref=${{ env.REGISTRY }}/lancache-sniproxy:buildcache,mode=max" \
+            -t ${{ env.REGISTRY }}/lancache-sniproxy --push .
           cd ..
 
       - name: Build & Push lancachenet/lancache-dns
@@ -104,5 +111,8 @@ jobs:
           line_number=$(grep -n "FROM lancachenet/ubuntu:latest" Dockerfile | cut -d: -f1)
           sed -i "${line_number}cFROM ${{ env.REGISTRY }}/lancache-ubuntu" Dockerfile
           cat Dockerfile
-          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 -t ${{ env.REGISTRY }}/lancache-dns --push .
+          docker buildx build --platform linux/amd64,linux/arm64/v8,linux/arm/v7 \
+            --cache-from "type=registry,ref=${{ env.REGISTRY }}/lancache-dns:buildcache" \
+            --cache-to "type=registry,ref=${{ env.REGISTRY }}/lancache-dns:buildcache,mode=max" \
+            -t ${{ env.REGISTRY }}/lancache-dns --push .
           cd ..

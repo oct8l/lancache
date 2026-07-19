@@ -74,6 +74,8 @@ build-candidates (same-repo PRs) --or-- fork-build-test (external fork PRs)
 
 **Purpose**: Prevents broken scheduled releases by pre-testing with latest upstream changes
 
+Builds share the same GHCR registry build cache (`<image>:buildcache`) as `pr-ci.yml` and `build.yml`, so a cache warmed by any of the three benefits the others.
+
 **Test levels**:
 
 - `basic`: Core functionality only
