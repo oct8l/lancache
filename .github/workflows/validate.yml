@@ -1,19 +1,22 @@
 name: Validate
 
 on:
-  pull_request:
-    branches:
-      - main
   push:
     branches:
       - main
+  workflow_call:
+    inputs:
+      base_sha:
+        description: "Base commit SHA to diff against for the whitespace check. Defaults to github.event.before for push events."
+        required: false
+        type: string
+      head_sha:
+        description: "Head commit SHA to diff against for the whitespace check. Defaults to github.sha."
+        required: false
+        type: string
 
 permissions:
   contents: read
-
-concurrency:
-  group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 env:
   # rhysd/actionlint bundles a pinned ShellCheck build, so one image covers both checks.
@@ -49,18 +52,15 @@ jobs:
             renovate-config-validator --strict renovate.json
 
       - name: Check for whitespace and conflict-marker errors in the diff
+        env:
+          BASE_SHA: ${{ inputs.base_sha || github.event.before }}
+          HEAD_SHA: ${{ inputs.head_sha || github.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-          else
-            base="${{ github.event.before }}"
-          fi
-
-          if [ -z "${base}" ] || ! git cat-file -e "${base}" 2>/dev/null; then
+          if [ -z "${BASE_SHA}" ] || ! git cat-file -e "${BASE_SHA}" 2>/dev/null; then
             echo "No usable base revision for this event; skipping git diff --check"
             exit 0
           fi
 
-          git diff --check "${base}" "${{ github.sha }}"
+          git diff --check "${BASE_SHA}" "${HEAD_SHA}"

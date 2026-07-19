@@ -4,41 +4,68 @@ This document describes the comprehensive testing infrastructure for the LanCach
 
 ## Overview
 
-The testing system consists of three main workflows that provide comprehensive validation:
+The testing system consists of four workflows that provide comprehensive validation:
 
-1. **PR Functionality Tests** - Validates every pull request
-2. **Scheduled Build Tests** - Pre-validates before scheduled releases
-3. **Performance Tests** - Manual performance and load testing
+1. **Validate** - Static validation of workflows, Compose, and Renovate config
+2. **PR CI** - Validates every pull request and gates merges via `ci-gate`
+3. **Scheduled Build Tests** - Pre-validates before scheduled releases
+4. **Performance Tests** - Manual performance and load testing
 
 ## Testing Workflows
 
-### 1. PR Functionality Tests (`.github/workflows/test-pr-functionality.yml`)
+### 1. Validate (`.github/workflows/validate.yml`)
 
-**Triggers**: Automatically on all pull requests to `main`
+**Triggers**: Called by PR CI for every pull request; also runs directly on push to `main`.
 
 **What it tests**:
 
-- ✅ **Multi-architecture support**: Tests both AMD64 and ARM64 images
-- ✅ **DNS resolution**: Validates all gaming CDN domains resolve correctly
-- ✅ **Cache functionality**: Tests Steam, Epic Games, Origin, Battle.net, and direct downloads
-- ✅ **Container health**: Ensures containers start and respond correctly
-- ✅ **Cache persistence**: Verifies cache storage is working
-- ✅ **Error detection**: Scans logs for critical errors
+- `actionlint` (with its bundled ShellCheck) lints every workflow file and embedded shell.
+- `docker compose config -q` validates the repository's user-facing `docker-compose.yml`.
+- `jq` confirms `renovate.json` is valid JSON, and `renovate-config-validator --strict` validates it against the current Renovate schema.
+- `git diff --check` catches whitespace/conflict-marker errors introduced by the change.
 
-**Test scenarios**:
+ShellCheck severity policy is documented in `.github/actionlint.yaml`: info/style findings are advisory; warning/error findings fail the job.
 
-- Steam content caching (`steamcontent.com`)
-- Epic Games launcher content (`download.epicgames.com`)
-- Origin content (`origin-a.akamaihd.net`)
-- Battle.net content (`blzddist1-a.akamaihd.net`)
-- Direct download caching
+### 2. PR CI (`.github/workflows/pr-ci.yml`)
+
+**Triggers**: Automatically on all pull requests to `main`. Superseded runs for the same PR are cancelled (PR-scoped concurrency group).
+
+**Job graph**:
+
+```text
+validate
+   |
+build-candidates (same-repo PRs) --or-- fork-build-test (external fork PRs)
+   |
+   +--> functional-amd64
+   +--> functional-arm64
+   +--> artifact-contracts
+              |
+           ci-gate
+```
+
+`ci-gate` is the single stable, non-matrix check intended to be required in branch protection. It explicitly evaluates the result of every job above (including the same-repo/fork branch that actually ran) and fails if any required job failed, was cancelled, or was skipped when it should have run.
+
+**Same-repository PRs** (including Renovate): `build-candidates` builds all six images once per revision, pushes them to GHCR tagged `pr-<number>-<head-sha>` (immutable — a new commit gets a new tag rather than overwriting the previous revision's images), and captures each image's manifest digest as a job output. `functional-amd64`, `functional-arm64`, and `artifact-contracts` all consume those exact digests, so updating a PR cannot cause a test to run against a stale image.
+
+**External fork PRs**: GitHub always issues a read-only `GITHUB_TOKEN` for `pull_request` runs from forks, regardless of the `permissions:` declared in the workflow, so `build-candidates` cannot push to GHCR for fork PRs. `fork-build-test` runs instead: a local, AMD64-only build (`--load`, no `--push`, no registry login) with a basic heartbeat smoke test. Fork PRs do not get ARM64 or artifact-contract coverage.
+
+**What the functional tests check**:
+
+- ✅ **DNS resolution**: Validates gaming CDN domains resolve to the DNS container's configured IP.
+- ✅ **Cache functionality**: Tests Steam, Epic Games, Origin, and Battle.net heartbeat responses.
+- ✅ **Container health**: Ensures containers start, report healthy, and respond correctly.
+- ✅ **Error detection**: Scans logs for critical errors.
+- ✅ **Dependency contracts**: `artifact-contracts` uploads and downloads a known file via `actions/upload-artifact` and `actions/download-artifact` so a Renovate PR bumping either action exercises it directly.
 
 **Architecture testing**:
 
-- **AMD64**: Full functional test suite with all scenarios
-- **ARM64**: Compatibility tests with core functionality (via QEMU emulation)
+- **AMD64**: Full functional test suite with all scenarios.
+- **ARM64**: Compatibility tests with core functionality (via QEMU emulation).
 
-### 2. Scheduled Build Tests (`.github/workflows/test-scheduled-functionality.yml`)
+> **Known gap (tracked for a follow-up PR)**: the functional tests above still only check the `/lancache-heartbeat` endpoint and DNS resolution — they do not yet download real content through the cache or assert cache hit/miss/persistence behavior. That deterministic content-cache test is planned separately.
+
+### 3. Scheduled Build Tests (`.github/workflows/test-scheduled-functionality.yml`)
 
 **Triggers**:
 
@@ -68,7 +95,7 @@ The testing system consists of three main workflows that provide comprehensive v
 - ❌ Multi-architecture build/runtime failures
 - ⚠️ Security vulnerabilities (warning only, doesn't block)
 
-### 3. Performance Tests (`.github/workflows/performance-tests.yml`)
+### 4. Performance Tests (`.github/workflows/performance-tests.yml`)
 
 **Triggers**: Manual only (`workflow_dispatch`)
 
@@ -168,9 +195,10 @@ Results include:
 ```yaml
 # In repository settings > Branches > main
 required_status_checks:
-  - "functional-test-amd64"
-  - "functional-test-arm64"
+  - "ci-gate"
 ```
+
+`ci-gate` is the only status check that should be required. It has a stable name independent of the functional-test matrix, and it explicitly fails if `validate`, the build, or any required functional/artifact job failed, was cancelled, or was skipped when it should have run.
 
 **Notification setup** (optional):
 
@@ -239,7 +267,7 @@ required_status_checks:
 # Use the same commands from workflows locally:
 git clone <repo>
 cd <repo>
-cp .github/workflows/test-pr-functionality.yml ./test-local.yml
+cp .github/workflows/pr-ci.yml ./test-local.yml
 # Edit test-local.yml to use local images
 docker compose -f test-compose.yml up -d
 ```
@@ -301,7 +329,7 @@ Legend: ✅ Full testing, ⚠️ Basic compatibility, N/A Not applicable
 
 ### Adding New Test Scenarios
 
-1. **Add to PR tests** in `test-pr-functionality.yml`
+1. **Add to PR tests** in `pr-ci.yml`
 2. **Update test matrix** to include new scenarios
 3. **Add performance benchmarks** in `performance-tests.yml`
 4. **Update documentation** in this file
