@@ -50,20 +50,25 @@ build-candidates (same-repo PRs) --or-- fork-build-test (external fork PRs)
 
 **External fork PRs**: GitHub always issues a read-only `GITHUB_TOKEN` for `pull_request` runs from forks, regardless of the `permissions:` declared in the workflow, so `build-candidates` cannot push to GHCR for fork PRs. `fork-build-test` runs instead: a local, AMD64-only build (`--load`, no `--push`, no registry login) with a basic heartbeat smoke test. Fork PRs do not get ARM64 or artifact-contract coverage.
 
-**What the functional tests check**:
+**What `functional-amd64` checks** — a deterministic DNS + cache content integration test against a committed fixture topology (`tests/cache-integration/`), with no public CDN dependency:
 
-- ✅ **DNS resolution**: Validates gaming CDN domains resolve to the DNS container's configured IP.
-- ✅ **Cache functionality**: Tests Steam, Epic Games, Origin, and Battle.net heartbeat responses.
-- ✅ **Container health**: Ensures containers start, report healthy, and respond correctly.
-- ✅ **Error detection**: Scans logs for critical errors.
+- ✅ **RPZ / DNS coverage**: A representative set of cache-domain hostnames (Steam, Epic, Origin, Battle.net, Uplay) resolve to the monolithic container's IP; a non-cache-domain name (`example.com`) does not.
+- ✅ **Cache miss then hit**: A client downloads known content through a cache-domain hostname; the response matches the fixture by checksum; the first request is a `MISS` and the second is a `HIT` (via nginx's `X-Upstream-Cache-Status` header).
+- ✅ **Strong cache-hit proof**: With the origin container stopped, an eligible cached response still serves correctly with the right checksum.
+- ✅ **Persistence**: After restarting monolithic (origin still stopped), the cached object remains usable.
+- ✅ **Cache storage**: The cache directory contains data after priming.
+- ✅ **`20_cache.conf` behavior**: `nocache=1` bypasses the cache (`BYPASS` status, origin re-fetched); range requests spanning a slice boundary return byte-correct content; 301/302 redirect responses are never cached (`MISS` on every request); concurrent first requests to the same uncached resource do not cause uncontrolled duplicate origin downloads (`proxy_cache_lock` dedup).
+- ✅ **Container health / error detection**: Compose healthchecks and failure diagnostics (container logs, cache directory listing) are collected automatically on failure.
 - ✅ **Dependency contracts**: `artifact-contracts` uploads and downloads a known file via `actions/upload-artifact` and `actions/download-artifact` so a Renovate PR bumping either action exercises it directly.
+
+The origin (`tests/cache-integration/origin/`) is a small Python HTTP server serving a committed 2.5MB deterministic fixture (`tests/cache-integration/fixtures/fixture.bin`, regenerable via `generate-fixture.py`), with per-path hit counters used to prove miss/hit/bypass/dedup behavior independent of the `X-Upstream-Cache-Status` header. It is reached via a test-only nginx `location` block installed into the running monolithic container at test time (mirroring the technique the performance-tests workflow already uses) — the candidate DNS and monolithic images themselves are never modified.
 
 **Architecture testing**:
 
-- **AMD64**: Full functional test suite with all scenarios.
-- **ARM64**: Compatibility tests with core functionality (via QEMU emulation).
+- **AMD64**: Full deterministic cache integration test described above.
+- **ARM64**: Compatibility tests with core functionality (via QEMU emulation) — still heartbeat/startup-level only; deeper ARM64 assertions are tracked for a later architecture-coverage PR.
 
-> **Known gap (tracked for a follow-up PR)**: the functional tests above still only check the `/lancache-heartbeat` endpoint and DNS resolution — they do not yet download real content through the cache or assert cache hit/miss/persistence behavior. That deterministic content-cache test is planned separately.
+> **Known gap (tracked for a follow-up PR)**: cache revalidation (`proxy_cache_revalidate`) and stale-response-on-upstream-error (`proxy_cache_use_stale`) are not yet covered. Both need a short-TTL cache configuration to force staleness within test time, which is a distinct environment from the single shared stack used above (see Phase 2.4's "simplify the matrix" guidance) — planned as a small dedicated addition rather than bundled here.
 
 ### 3. Scheduled Build Tests (`.github/workflows/test-scheduled-functionality.yml`)
 
