@@ -53,6 +53,11 @@ jobs:
           SNIPROXY_IMAGE=placeholder \
             docker compose -f tests/sniproxy/docker-compose.yml config -q
 
+      - name: Validate repository docker-compose.yml with the CI override
+        run: |
+          DNS_IMAGE=placeholder MONOLITHIC_IMAGE=placeholder \
+            docker compose -f docker-compose.yml -f tests/repo-compose/ci-override.yml config -q
+
       - name: ShellCheck extracted test scripts
         run: |
           mapfile -d '' -t scripts < <(find tests scripts -type f -name '*.sh' -print0)

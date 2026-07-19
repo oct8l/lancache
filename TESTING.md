@@ -43,6 +43,7 @@ build-candidates (same-repo PRs) --or-- fork-build-test (external fork PRs)
    +--> functional-arm64
    +--> component-generic
    +--> component-sniproxy
+   +--> component-repo-compose
    +--> artifact-contracts
               |
            ci-gate
@@ -50,7 +51,7 @@ build-candidates (same-repo PRs) --or-- fork-build-test (external fork PRs)
 
 `ci-gate` is the single stable, non-matrix check intended to be required in branch protection. It explicitly evaluates the result of every job above (including the same-repo/fork branch that actually ran) and fails if any required job failed, was cancelled, or was skipped when it should have run.
 
-**Same-repository PRs** (including Renovate): `build-candidates` builds all six images once per revision, pushes them to GHCR tagged `pr-<number>-<head-sha>` (immutable — a new commit gets a new tag rather than overwriting the previous revision's images), and captures each image's manifest digest as a job output. `functional-amd64`, `functional-arm64`, `component-generic`, `component-sniproxy`, and `artifact-contracts` all consume those exact digests, so updating a PR cannot cause a test to run against a stale image.
+**Same-repository PRs** (including Renovate): `build-candidates` builds all six images once per revision, pushes them to GHCR tagged `pr-<number>-<head-sha>` (immutable — a new commit gets a new tag rather than overwriting the previous revision's images), and captures each image's manifest digest as a job output. `functional-amd64`, `functional-arm64`, `component-generic`, `component-sniproxy`, `component-repo-compose`, and `artifact-contracts` all consume those exact digests, so updating a PR cannot cause a test to run against a stale image.
 
 **External fork PRs**: GitHub always issues a read-only `GITHUB_TOKEN` for `pull_request` runs from forks, regardless of the `permissions:` declared in the workflow, so `build-candidates` cannot push to GHCR for fork PRs. `fork-build-test` runs instead: a local, AMD64-only build (`--load`, no `--push`, no registry login) with a basic heartbeat smoke test. Fork PRs do not get ARM64 or artifact-contract coverage.
 
@@ -91,7 +92,9 @@ Every image is built for AMD64, ARM64, and ARMv7 (`build-candidates.yml`), which
 
 `component-sniproxy` (`tests/sniproxy/`) verifies "TLS pass-through reaches a controlled origin": a small self-signed-TLS nginx origin is registered under a network alias (`sniproxy-test.internal`); a client container first confirms the origin serves known content directly (sanity check that the fixture itself is correct), then uses `curl --connect-to sniproxy-test.internal:443:sniproxy:443` to force the same request's *TCP connection* through the candidate sniproxy container while keeping the *SNI hostname* unchanged. sniproxy resolves that hostname via Docker's embedded DNS (`UPSTREAM_DNS=127.0.0.11`) and passes the TLS bytes straight through to the origin without terminating TLS itself. The response must match the origin's known content exactly, proving the pass-through actually reached the intended destination rather than erroring, hanging, or connecting elsewhere.
 
-> **Known gap (tracked for follow-up PRs)**: `sniproxy` has no dedicated runtime test at all today (only a manifest-platform check), and no image has ARMv7 or ARM64 (for `generic`) runtime coverage yet — ARMv7 QEMU emulation is slow enough that it's planned for the release-gate's deeper suite rather than every PR, per the plan's "fast required suite, deeper scheduled suite" principle. The repository's own `docker-compose.yml` is not yet tested against candidate images either.
+`component-repo-compose` validates the repository's own user-facing `docker-compose.yml` — the file real users follow via `README.md` — rather than only the test-specific fixtures under `tests/`. It layers a CI-only override (`tests/repo-compose/ci-override.yml`, using the Compose Specification's `!override` merge tag so host ports are fully replaced rather than merged) on top of the real file to substitute the tested candidate digests and non-conflicting host ports (`15353`/`15380`/`15443` instead of `53`/`80`/`443`), writes a CI-safe `.env` (a real interface IP is required — `lancache-dns` rejects loopback addresses — detected via `ip -4 route get`), then asserts real DNS resolution and a working HTTP heartbeat through the started stack. `docker-compose.yml` itself is never edited.
+
+> **Known gap (tracked for follow-up PRs)**: no image has ARMv7 runtime coverage yet, and `generic`/`sniproxy` have no ARM64 coverage either — ARMv7 QEMU emulation is slow enough that it's planned for the release-gate's deeper suite rather than every PR, per the plan's "fast required suite, deeper scheduled suite" principle.
 
 ### 3. Release (`.github/workflows/release.yml`)
 

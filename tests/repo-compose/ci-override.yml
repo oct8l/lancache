@@ -1,0 +1,12 @@
+services:
+  dns:
+    image: ${DNS_IMAGE}
+    ports: !override
+      - "${DNS_BIND_IP}:15353:53/udp"
+      - "${DNS_BIND_IP}:15353:53/tcp"
+
+  monolithic:
+    image: ${MONOLITHIC_IMAGE}
+    ports: !override
+      - "15380:80/tcp"
+      - "15443:443/tcp"
