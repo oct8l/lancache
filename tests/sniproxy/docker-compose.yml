@@ -1,0 +1,36 @@
+services:
+  origin:
+    build:
+      context: origin
+    networks:
+      sniproxy_test:
+        aliases:
+          - sniproxy-test.internal
+    healthcheck:
+      test: ["CMD", "curl", "-ks", "-o", "/dev/null", "https://127.0.0.1/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  sniproxy:
+    image: ${SNIPROXY_IMAGE:?SNIPROXY_IMAGE must be set}
+    environment:
+      # Docker's embedded resolver, so sniproxy resolves the origin's network
+      # alias the same way any other container on this network would.
+      UPSTREAM_DNS: "127.0.0.11"
+    networks:
+      - sniproxy_test
+
+  client:
+    build:
+      context: ../cache-integration/client
+    networks:
+      - sniproxy_test
+    depends_on:
+      origin:
+        condition: service_healthy
+
+networks:
+  sniproxy_test:
+    driver: bridge
