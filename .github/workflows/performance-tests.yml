@@ -180,7 +180,7 @@ jobs:
             start_time=$(date +%s%N)
             result=$(nslookup $domain 127.0.0.1:5353 | grep "Address:" | tail -1 | awk '{print $2}')
             end_time=$(date +%s%N)
-            
+
             if [ "$result" = "127.0.0.1" ]; then
               query_time=$(( (end_time - start_time) / 1000000 ))
               total_time=$((total_time + query_time))
@@ -196,7 +196,7 @@ jobs:
             echo "📊 DNS Performance Summary:" >> $GITHUB_STEP_SUMMARY
             echo "- Successful queries: $successful_queries/${#test_domains[@]}" >> $GITHUB_STEP_SUMMARY
             echo "- Average resolution time: ${avg_time}ms" >> $GITHUB_STEP_SUMMARY
-            
+
             if [ $avg_time -lt 50 ]; then
               echo "✅ DNS performance is excellent (< 50ms)" >> $GITHUB_STEP_SUMMARY
             elif [ $avg_time -lt 100 ]; then
@@ -220,13 +220,13 @@ jobs:
       - name: Cache Performance Test
         run: |
           echo "Running cache performance tests..."
-           
+
            # Test cache miss vs cache hit performance
            test_files=("small-1kb.bin" "small-100kb.bin" "medium-1mb.bin")
-           
+
           for file in "${test_files[@]}"; do
             echo "Testing cache performance for $file..."
-            
+
             # Configure nginx to proxy to our test server for this file
             docker compose -f perf-compose.yml exec -T monolithic sh -c '
               mkdir -p /etc/nginx/sites-available/cache.conf.d/
@@ -238,26 +238,26 @@ jobs:
           EOF
               nginx -s reload
             '
-            
+
             # Test cache miss (first request)
             echo "Testing cache miss for $file..."
             miss_start=$(date +%s%N)
             curl -s -o /dev/null http://127.0.0.1:8080/$file
             miss_end=$(date +%s%N)
             miss_time=$(( (miss_end - miss_start) / 1000000 ))
-            
+
             # Small delay to ensure cache write completes
             sleep 1
-            
+
             # Test cache hit (second request)
             echo "Testing cache hit for $file..."
             hit_start=$(date +%s%N)
             curl -s -o /dev/null http://127.0.0.1:8080/$file
             hit_end=$(date +%s%N)
             hit_time=$(( (hit_end - hit_start) / 1000000 ))
-            
+
             improvement_ratio=$(echo "scale=2; $miss_time / $hit_time" | bc)
-            
+
             echo "📊 Cache Performance for $file:" >> $GITHUB_STEP_SUMMARY
             echo "- Cache miss: ${miss_time}ms" >> $GITHUB_STEP_SUMMARY
             echo "- Cache hit: ${hit_time}ms" >> $GITHUB_STEP_SUMMARY
@@ -315,7 +315,7 @@ jobs:
             requests_per_sec=$(grep "Requests per second" ab_results.txt | awk '{print $4}')
             mean_time=$(grep "Time per request.*mean" ab_results.txt | head -1 | awk '{print $4}')
             failed_requests=$(grep "Failed requests" ab_results.txt | awk '{print $3}')
-            
+
             echo "- Requests per second: $requests_per_sec" >> $GITHUB_STEP_SUMMARY
             echo "- Mean time per request: ${mean_time}ms" >> $GITHUB_STEP_SUMMARY
             echo "- Failed requests: $failed_requests" >> $GITHUB_STEP_SUMMARY

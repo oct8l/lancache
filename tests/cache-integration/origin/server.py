@@ -25,7 +25,7 @@ SLOW_DELAY_SECONDS = float(os.environ.get("SLOW_DELAY_SECONDS", "1.5"))
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 _lock = threading.Lock()
-_hits = {}
+_hits: dict[str, int] = {}
 
 
 def _record_hit(path):
@@ -36,7 +36,7 @@ def _record_hit(path):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, fmt, *args):
+    def log_message(self, format, *args):
         pass  # keep container logs quiet; /stats is the source of truth
 
     def do_GET(self):

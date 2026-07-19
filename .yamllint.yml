@@ -1,0 +1,11 @@
+extends: default
+rules:
+  # GitHub Actions workflows conventionally omit "---" and use a bare `on:`
+  # key, which trips these two default rules on almost every real workflow.
+  document-start: disable
+  truthy: disable
+  # A style opinion, not a correctness check -- long `run:` commands and
+  # conditional expressions are normal in workflow YAML and often clearer
+  # unwrapped. Consistent with not enabling MegaLinter's other formatters
+  # (see .mega-linter.yml).
+  line-length: disable

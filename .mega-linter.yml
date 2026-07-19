@@ -1,0 +1,21 @@
+# MegaLinter configuration. Deliberately scoped to a small whitelist rather
+# than a whole flavor's descriptor groups: the cupcake flavor's IaC scanners
+# (checkov, kics) mostly flag disposable CI test fixtures for missing
+# production hardening (no USER, no healthcheck, privileged ports our real
+# docker-compose.yml legitimately needs), and its formatters (shfmt, black,
+# prettier, markdown-table-formatter) are style opinions rather than
+# correctness checks. See TESTING.md for the reasoning behind each inclusion.
+ENABLE_LINTERS:
+  - DOCKERFILE_HADOLINT
+  - REPOSITORY_GITLEAKS
+  - REPOSITORY_SECRETLINT
+  - REPOSITORY_TRUFFLEHOG
+  - YAML_YAMLLINT
+  - PYTHON_MYPY
+  - PYTHON_PYRIGHT
+
+APPLY_FIXES: none
+GITHUB_COMMENT_REPORTER: false
+GITHUB_STATUS_REPORTER: false
+UPDATED_SOURCES_REPORTER: false
+FLAVOR_SUGGESTIONS: false
