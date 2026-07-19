@@ -274,6 +274,40 @@ jobs:
             echo "digest=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Verify published manifest platforms
+        if: inputs.push
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+
+          IFS=',' read -ra want_raw <<< "${PLATFORMS}"
+          want=()
+          for p in "${want_raw[@]}"; do
+            # imagetools reports arm64 without the /v8 variant suffix used on
+            # the buildx --platform flag; strip it so the comparison matches.
+            want+=("${p%/v8}")
+          done
+          mapfile -t sorted_want < <(printf '%s\n' "${want[@]}" | sort)
+
+          verify() {
+            local ref="$1"
+            local got
+            mapfile -t got < <(docker buildx imagetools inspect "${ref}" --format '{{json .}}' | jq -r '.image | keys[]' | sort)
+            if [ "${sorted_want[*]}" != "${got[*]}" ]; then
+              echo "::error::${ref}: expected platforms [${sorted_want[*]}], got [${got[*]:-none}]"
+              exit 1
+            fi
+            echo "Verified ${ref} platforms: ${got[*]}"
+          }
+
+          verify "${REGISTRY}/lancache-ubuntu:${{ inputs.image_tag }}"
+          verify "${REGISTRY}/lancache-ubuntu-nginx:${{ inputs.image_tag }}"
+          verify "${REGISTRY}/lancache-monolithic:${{ inputs.image_tag }}"
+          verify "${REGISTRY}/lancache-generic:${{ inputs.image_tag }}"
+          verify "${REGISTRY}/lancache-sniproxy:${{ inputs.image_tag }}"
+          verify "${REGISTRY}/lancache-dns:${{ inputs.image_tag }}"
+
       - name: Record candidate build summary
         run: |
           {

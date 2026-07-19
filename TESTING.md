@@ -68,9 +68,24 @@ The origin (`tests/cache-integration/origin/`) is a small Python HTTP server ser
 **Architecture testing**:
 
 - **AMD64**: Full deterministic cache integration test described above.
-- **ARM64**: Compatibility tests with core functionality (via QEMU emulation) — still heartbeat/startup-level only; deeper ARM64 assertions are tracked for a later architecture-coverage PR.
+- **ARM64**: Real health/exit-state assertions (not just trusting `docker compose ps`) plus one DNS and one HTTP assertion against the actual candidate images, under QEMU emulation. A container that exits immediately, or never reaches `healthy`, fails the job.
 
 > **Known gap (tracked for a follow-up PR)**: cache revalidation (`proxy_cache_revalidate`) and stale-response-on-upstream-error (`proxy_cache_use_stale`) are not yet covered. Both need a short-TTL cache configuration to force staleness within test time, which is a distinct environment from the single shared stack used above (see Phase 2.4's "simplify the matrix" guidance) — planned as a small dedicated addition rather than bundled here.
+
+### Architecture and component coverage matrix
+
+Every image is built for AMD64, ARM64, and ARMv7 (`build-candidates.yml`), which also verifies the published manifest actually contains all three platforms before returning digests — a build that silently drops a platform fails before it can reach a test, let alone promotion. Runtime coverage below is intentionally risk-proportionate: heavier for the images most central to correct caching, lighter for images that are mostly pass-through:
+
+| Image | AMD64 | ARM64 | ARMv7 | Required behavior | Status |
+| --- | --- | --- | --- | --- | --- |
+| `lancache-ubuntu` | Build/smoke | Build/smoke | Build/smoke | Starts and runs a basic command | Manifest-verified; no dedicated runtime smoke test yet |
+| `lancache-ubuntu-nginx` | Build/smoke | Build/smoke | Build/smoke | Nginx starts and config validates | Manifest-verified; no dedicated runtime smoke test yet |
+| `lancache-monolithic` | Full integration | Core integration | Startup/heartbeat | DNS-to-cache and content behavior | AMD64 full + ARM64 core done; ARMv7 pending |
+| `lancache-generic` | Startup/function | Startup/function | Startup | Derived image uses the intended candidate base | Pending |
+| `lancache-sniproxy` | Startup/TLS path | Startup/TLS path | Startup | TLS pass-through reaches a controlled origin | Pending |
+| `lancache-dns` | Full DNS | Core DNS | Startup/query | Cacheable and forwarded lookups work | AMD64 full + ARM64 core done; ARMv7 pending |
+
+> **Known gap (tracked for follow-up PRs)**: `generic` and `sniproxy` have no dedicated runtime test at all today (only a manifest-platform check), and no image has ARMv7 runtime coverage yet — ARMv7 QEMU emulation is slow enough that it's planned for the release-gate's deeper suite rather than every PR, per the plan's "fast required suite, deeper scheduled suite" principle. The repository's own `docker-compose.yml` is not yet tested against candidate images either.
 
 ### 3. Release (`.github/workflows/release.yml`)
 
