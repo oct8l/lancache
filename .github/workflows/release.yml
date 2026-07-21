@@ -125,7 +125,7 @@ jobs:
       DNS_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-dns@${{ needs.build-candidates.outputs.dns_digest }}
       MONOLITHIC_IMAGE: ghcr.io/${{ github.repository_owner }}/lancache-monolithic@${{ needs.build-candidates.outputs.monolithic_digest }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Start fixture topology
         working-directory: tests/cache-integration
