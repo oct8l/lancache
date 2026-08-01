@@ -178,7 +178,7 @@ jobs:
 
       - name: Upload lancache-ubuntu SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: results-ubuntu.sarif
           category: lancache-ubuntu
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload lancache-ubuntu-nginx SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: results-ubuntu-nginx.sarif
           category: lancache-ubuntu-nginx
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload lancache-monolithic SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: results-monolithic.sarif
           category: lancache-monolithic
@@ -241,7 +241,7 @@ jobs:
 
       - name: Upload lancache-generic SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: results-generic.sarif
           category: lancache-generic
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload lancache-sniproxy SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: results-sniproxy.sarif
           category: lancache-sniproxy
@@ -283,7 +283,7 @@ jobs:
 
       - name: Upload lancache-dns SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: results-dns.sarif
           category: lancache-dns
