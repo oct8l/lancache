@@ -28,7 +28,7 @@ permissions:
 env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
   CANDIDATE_TAG: candidate-${{ github.run_id }}
-  TRIVY_VERSION: v0.73.0
+  TRIVY_VERSION: v0.74.0
 
 jobs:
   resolve-upstream-shas:
