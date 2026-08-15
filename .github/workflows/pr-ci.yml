@@ -96,6 +96,27 @@ jobs:
         working-directory: tests/cache-integration
         run: docker compose down -v || true
 
+  # Runs the identical Trivy scan/threshold release.yml's security-scan uses
+  # (shared via security-scan.yml) against this PR's own candidate images —
+  # so a vulnerability newly disclosed against an otherwise-unchanged base
+  # image (e.g. a libudev1 CVE landing on ubuntu:24.04) fails the PR here,
+  # not only after it's already merged to main.
+  security-scan:
+    needs: build-candidates
+    if: success() && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/security-scan.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      registry: ghcr.io/${{ github.repository_owner }}
+      ubuntu_digest: ${{ needs.build-candidates.outputs.ubuntu_digest }}
+      ubuntu_nginx_digest: ${{ needs.build-candidates.outputs.ubuntu_nginx_digest }}
+      monolithic_digest: ${{ needs.build-candidates.outputs.monolithic_digest }}
+      generic_digest: ${{ needs.build-candidates.outputs.generic_digest }}
+      sniproxy_digest: ${{ needs.build-candidates.outputs.sniproxy_digest }}
+      dns_digest: ${{ needs.build-candidates.outputs.dns_digest }}
+
   # ARM64 "core integration" per the risk-based architecture matrix in
   # TESTING.md: not the full deterministic content-cache suite (that's
   # AMD64-only, above), but real health/exit-state assertions plus one DNS
@@ -616,6 +637,7 @@ jobs:
     needs:
       - validate
       - build-candidates
+      - security-scan
       - functional-amd64
       - functional-arm64
       - component-generic
@@ -634,6 +656,7 @@ jobs:
           IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           BUILD_RESULT: ${{ needs.build-candidates.result }}
+          SECURITY_RESULT: ${{ needs.security-scan.result }}
           AMD64_RESULT: ${{ needs.functional-amd64.result }}
           ARM64_RESULT: ${{ needs.functional-arm64.result }}
           GENERIC_RESULT: ${{ needs.component-generic.result }}
@@ -643,7 +666,7 @@ jobs:
           FORK_RESULT: ${{ needs.fork-build-test.result }}
         run: |
           set -euo pipefail
-          echo "is_fork=$IS_FORK validate=$VALIDATE_RESULT build=$BUILD_RESULT amd64=$AMD64_RESULT arm64=$ARM64_RESULT generic=$GENERIC_RESULT sniproxy=$SNIPROXY_RESULT repo_compose=$REPO_COMPOSE_RESULT artifact=$ARTIFACT_RESULT fork=$FORK_RESULT"
+          echo "is_fork=$IS_FORK validate=$VALIDATE_RESULT build=$BUILD_RESULT security=$SECURITY_RESULT amd64=$AMD64_RESULT arm64=$ARM64_RESULT generic=$GENERIC_RESULT sniproxy=$SNIPROXY_RESULT repo_compose=$REPO_COMPOSE_RESULT artifact=$ARTIFACT_RESULT fork=$FORK_RESULT"
 
           if [ "$VALIDATE_RESULT" != "success" ]; then
             echo "::error::validate did not succeed ($VALIDATE_RESULT)"
@@ -657,7 +680,7 @@ jobs:
             fi
           else
             failed=0
-            for pair in "build-candidates:$BUILD_RESULT" "functional-amd64:$AMD64_RESULT" "functional-arm64:$ARM64_RESULT" "component-generic:$GENERIC_RESULT" "component-sniproxy:$SNIPROXY_RESULT" "component-repo-compose:$REPO_COMPOSE_RESULT" "artifact-contracts:$ARTIFACT_RESULT"; do
+            for pair in "build-candidates:$BUILD_RESULT" "security-scan:$SECURITY_RESULT" "functional-amd64:$AMD64_RESULT" "functional-arm64:$ARM64_RESULT" "component-generic:$GENERIC_RESULT" "component-sniproxy:$SNIPROXY_RESULT" "component-repo-compose:$REPO_COMPOSE_RESULT" "artifact-contracts:$ARTIFACT_RESULT"; do
               name="${pair%%:*}"
               result="${pair##*:}"
               if [ "$result" != "success" ]; then
