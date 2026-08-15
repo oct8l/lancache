@@ -6,12 +6,12 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Trivy CLI pinned in the release workflow",
+      "description": "Trivy CLI pinned as the security-scan reusable workflow's default (shared by release.yml and pr-ci.yml)",
       "managerFilePatterns": [
-        "/^\\.github/workflows/release\\.ya?ml$/"
+        "/^\\.github/workflows/security-scan\\.ya?ml$/"
       ],
       "matchStrings": [
-        "TRIVY_VERSION:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+        "default:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "aquasecurity/trivy"
