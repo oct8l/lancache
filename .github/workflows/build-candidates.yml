@@ -68,7 +68,7 @@ jobs:
       # base images are, via pin-base-image.sh. Bumping this directly
       # resolved every one of those findings when verified locally with
       # Trivy against the same dnstool source.
-      DNS_GO_BUILDER_IMAGE: golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83
+      DNS_GO_BUILDER_IMAGE: golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125
     outputs:
       ubuntu_digest: ${{ steps.ubuntu.outputs.digest }}
       ubuntu_nginx_digest: ${{ steps.ubuntu-nginx.outputs.digest }}
