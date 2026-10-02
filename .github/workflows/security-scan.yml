@@ -57,7 +57,7 @@ jobs:
       - name: Scan lancache-ubuntu
         id: scan-ubuntu
         continue-on-error: true
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e # master
         with:
           image-ref: ${{ inputs.registry }}/lancache-ubuntu@${{ inputs.ubuntu_digest }}
           version: ${{ inputs.trivy_version }}
@@ -79,7 +79,7 @@ jobs:
       - name: Scan lancache-ubuntu-nginx
         id: scan-ubuntu-nginx
         continue-on-error: true
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e # master
         with:
           image-ref: ${{ inputs.registry }}/lancache-ubuntu-nginx@${{ inputs.ubuntu_nginx_digest }}
           version: ${{ inputs.trivy_version }}
@@ -101,7 +101,7 @@ jobs:
       - name: Scan lancache-monolithic
         id: scan-monolithic
         continue-on-error: true
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e # master
         with:
           image-ref: ${{ inputs.registry }}/lancache-monolithic@${{ inputs.monolithic_digest }}
           version: ${{ inputs.trivy_version }}
@@ -123,7 +123,7 @@ jobs:
       - name: Scan lancache-generic
         id: scan-generic
         continue-on-error: true
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e # master
         with:
           image-ref: ${{ inputs.registry }}/lancache-generic@${{ inputs.generic_digest }}
           version: ${{ inputs.trivy_version }}
@@ -145,7 +145,7 @@ jobs:
       - name: Scan lancache-sniproxy
         id: scan-sniproxy
         continue-on-error: true
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e # master
         with:
           image-ref: ${{ inputs.registry }}/lancache-sniproxy@${{ inputs.sniproxy_digest }}
           version: ${{ inputs.trivy_version }}
@@ -167,7 +167,7 @@ jobs:
       - name: Scan lancache-dns
         id: scan-dns
         continue-on-error: true
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        uses: aquasecurity/trivy-action@c03d123cb480c08c69b054af418ea5e69fe6e57e # master
         with:
           image-ref: ${{ inputs.registry }}/lancache-dns@${{ inputs.dns_digest }}
           version: ${{ inputs.trivy_version }}
