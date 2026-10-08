@@ -39,8 +39,7 @@ on:
         required: false
         type: string
         # Renovate's customManager (renovate.json) tracks this default via
-        # a regex match on this exact line, the same way it tracks
-        # DNS_GO_BUILDER_IMAGE in build-candidates.yml.
+        # a regex match on this exact line.
         default: v0.74.0
 
 permissions:
