@@ -61,14 +61,6 @@ jobs:
       packages: write
     env:
       REGISTRY: ghcr.io/${{ github.repository_owner }}
-      # lancache-dns's own Dockerfile pins golang:1.23.1-alpine for its
-      # dnstool builder stage, which carries 15 HIGH/CRITICAL stdlib CVEs
-      # (crypto/tls, crypto/x509, net/*) fixed in later Go releases. Upstream
-      # hasn't bumped it, so it's overridden here the same way the other
-      # base images are, via pin-base-image.sh. Bumping this directly
-      # resolved every one of those findings when verified locally with
-      # Trivy against the same dnstool source.
-      DNS_GO_BUILDER_IMAGE: golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414
     outputs:
       ubuntu_digest: ${{ steps.ubuntu.outputs.digest }}
       ubuntu_nginx_digest: ${{ steps.ubuntu-nginx.outputs.digest }}
@@ -287,8 +279,6 @@ jobs:
           git clone https://github.com/lancachenet/lancache-dns.git
           cd lancache-dns
           git checkout "${REF}"
-          bash "${GITHUB_WORKSPACE}/scripts/pin-base-image.sh" Dockerfile \
-            "FROM golang:1.23.1-alpine AS builder-dnstool" "FROM ${DNS_GO_BUILDER_IMAGE} AS builder-dnstool"
           if [ "${DO_PUSH}" = "true" ]; then
             base="${REGISTRY}/lancache-ubuntu@${{ steps.ubuntu.outputs.digest }}"
           else
