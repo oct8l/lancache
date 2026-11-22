@@ -561,6 +561,7 @@ jobs:
           set -euo pipefail
           git clone https://github.com/lancachenet/lancache-dns.git
           cd lancache-dns
+          bash "${GITHUB_WORKSPACE}/scripts/pin-dns-go-builder.sh" Dockerfile
           bash "${GITHUB_WORKSPACE}/scripts/pin-base-image.sh" Dockerfile \
             "FROM lancachenet/ubuntu:latest" "FROM lancache-ubuntu:fork-local"
           docker buildx build --platform linux/amd64 \

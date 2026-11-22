@@ -15,6 +15,18 @@
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "aquasecurity/trivy"
+    },
+    {
+      "customType": "regex",
+      "description": "Go builder image pinned for the lancache-dns dnstool stage",
+      "managerFilePatterns": [
+        "/^scripts\\/pin-dns-go-builder\\.sh$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\n)DNS_GO_BUILDER_IMAGE=\"(?<depName>golang):(?<currentValue>[\\w.-]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
     }
   ],
   "packageRules": [
