@@ -185,7 +185,7 @@ jobs:
           sarif_file: results-dns.sarif
           category: lancache-dns
 
-      - name: Fail if any image had blocking findings
+      - name: Report and fail unsuccessful image scans
         if: always()
         env:
           UBUNTU_OUTCOME: ${{ steps.scan-ubuntu.outcome }}
@@ -208,9 +208,27 @@ jobs:
             name="${pair%%:*}"
             outcome="${pair##*:}"
             echo "${name}: ${outcome}"
-            if [ "${outcome}" != "success" ]; then
-              echo "::error::${name} has HIGH/CRITICAL vulnerabilities with an available fix"
-              failed=1
+            if [ "${outcome}" = "success" ]; then
+              continue
+            fi
+
+            failed=1
+            report="results-${name#lancache-}.sarif"
+            # Trivy can also report secrets. Only print the details of package findings.
+            if [ -s "${report}" ] && findings=$(jq -er '
+              .runs[].results[]? | select(.level == "error")
+              | if (.message.text | startswith("Package: ")) then
+                  "  \(.locations[0].physicalLocation.artifactLocation.uri // "Unknown location")",
+                  (.message.text | split("\n")[] | "    \(.)")
+                else
+                  "  \(.ruleId) (see code scanning for details)"
+                end
+            ' "${report}"); then
+              echo "::error::${name} has blocking Trivy findings"
+              marker=$(uuidgen)
+              printf '::stop-commands::%s\n%s\n::%s::\n' "${marker}" "${findings}" "${marker}"
+            else
+              echo "::error::${name} scan ended with outcome '${outcome}' and no readable blocking findings in ${report}. Check the scan step log."
             fi
           done
           if [ "${failed}" -ne 0 ]; then
